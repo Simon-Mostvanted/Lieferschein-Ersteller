@@ -42,6 +42,12 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
   input, select, textarea { font-family: inherit; }
+  /* Auf dem iPhone zoomt Safari beim Antippen in jedes Feld, dessen
+     Schrift kleiner als 16px ist. Danach steht die Seite schief und muss
+     von Hand zurückgezogen werden. Deshalb am Telefon überall 16px. */
+  @media (max-width: 640px) {
+    input, select, textarea { font-size: 16px !important; }
+  }
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
   input[type=number] { -moz-appearance: textfield; }
@@ -189,27 +195,38 @@ async function lexware(aktion, nutzlast) {
   return data;
 }
 
-/** Base64 aus der Funktion in ein druckbares PDF verwandeln. */
-function pdfAnzeigen(base64) {
+/** Ob das Gerät mit dem Finger bedient wird - Telefon oder Tablet. */
+const istTouch = window.matchMedia("(pointer: coarse)").matches;
+
+/**
+ * Base64 aus der Funktion in ein anzeigbares PDF verwandeln.
+ *
+ * Am Rechner öffnet sich der Druckdialog von selbst, über einen
+ * unsichtbaren Rahmen. Am Telefon nicht: Dort ist dieser Weg
+ * unzuverlässig, und ein automatisch geöffnetes Fenster wird ohnehin
+ * meist blockiert, weil zwischen dem Antippen und dem fertigen PDF
+ * mehrere Sekunden liegen. Am Telefon führt deshalb ein sichtbarer
+ * Knopf zum PDF - ein Fingertipp, den der Browser als Absicht erkennt.
+ */
+function pdfBereitstellen(base64) {
   const roh = atob(base64);
   const bytes = new Uint8Array(roh.length);
   for (let i = 0; i < roh.length; i++) bytes[i] = roh.charCodeAt(i);
   const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
 
-  /* Der Druckdialog wird über einen unsichtbaren Rahmen ausgelöst.
-     Wichtig: Das passiert im Anschluss an einen Klick, sonst greift der
-     Popup-Blocker. */
-  const rahmen = document.getElementById("druckrahmen");
-  rahmen.src = url;
-  rahmen.onload = () => {
-    try {
-      rahmen.contentWindow.focus();
-      rahmen.contentWindow.print();
-    } catch (e) {
-      /* Manche Browser verweigern das. Dann bleibt der Knopf
-         "PDF öffnen" als Weg. */
-    }
-  };
+  if (!istTouch) {
+    const rahmen = document.getElementById("druckrahmen");
+    rahmen.src = url;
+    rahmen.onload = () => {
+      try {
+        rahmen.contentWindow.focus();
+        rahmen.contentWindow.print();
+      } catch (e) {
+        /* Manche Browser verweigern das. Dann bleibt der Knopf
+           "PDF öffnen" als Weg. */
+      }
+    };
+  }
   return url;
 }
 
@@ -332,10 +349,13 @@ function NamensAuswahl({ mitarbeiter, letzterName, onWahl }) {
           </button>
         ) : null}
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        {/* Zwei Spalten schon am Telefon: Bei siebzehn Namen wäre eine
+            einzelne Spalte eine halbe Bildschirmlänge Scrollen. */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
           {mitarbeiter.map(m => (
             <button key={m.id} onClick={() => onWahl(m)}
-                    className="bg-panel border border-line rounded-2xl px-6 py-6 text-lg font-bold
+                    className="bg-panel border border-line rounded-2xl px-3 py-4 text-base font-bold
+                               sm:px-6 sm:py-6 sm:text-lg
                                hover:border-accent hover:bg-panel2 transition active:scale-[0.98]">
               {m.name}
             </button>
@@ -869,20 +889,28 @@ function Ergebnis({ ergebnis, onNochmalDrucken, onNeu, onSchliessen }) {
         <div className="text-4xl mb-3">✅</div>
         <p className="text-xl font-bold">{ergebnis.nummer || "Angelegt"}</p>
         <p className="text-muted mt-1">
-          Der Druckdialog sollte sich geöffnet haben.
+          {istTouch
+            ? "Zum Drucken das PDF öffnen und im Browser auf Teilen bzw. Drucken tippen."
+            : "Der Druckdialog sollte sich geöffnet haben."}
         </p>
       </div>
 
       <div className="flex flex-col gap-2 mt-5">
-        <Knopf art="still" onClick={onNochmalDrucken}>Noch einmal drucken</Knopf>
+        {/* Am Telefon ist der Weg zum PDF die Hauptsache und steht
+            deshalb oben und hervorgehoben. */}
         {ergebnis.pdfUrl ? (
           <a href={ergebnis.pdfUrl} target="_blank" rel="noreferrer"
-             className="inline-flex items-center justify-center gap-2 rounded-xl font-semibold px-5 py-3
-                        min-h-12 bg-transparent border border-line2 text-muted hover:text-text hover:border-accent transition">
-            PDF in neuem Tab öffnen
+             className={"inline-flex items-center justify-center gap-2 rounded-xl font-semibold px-5 py-3 " +
+               "min-h-12 transition " + (istTouch
+                 ? "bg-accent hover:bg-accent2 text-white"
+                 : "bg-transparent border border-line2 text-muted hover:text-text hover:border-accent")}>
+            {istTouch ? "PDF öffnen und drucken" : "PDF in neuem Tab öffnen"}
           </a>
         ) : null}
-        <Knopf onClick={onNeu}>Nächster Lieferschein</Knopf>
+        {!istTouch ? (
+          <Knopf art="still" onClick={onNochmalDrucken}>Noch einmal drucken</Knopf>
+        ) : null}
+        <Knopf art={istTouch ? "still" : "primaer"} onClick={onNeu}>Nächster Lieferschein</Knopf>
       </div>
     </Dialog>
   );
@@ -916,10 +944,17 @@ function Protokoll({ onDrucken, mitarbeiter }) {
       });
   }, []);
 
+  /* Am Telefon wird nichts gedruckt, sondern der Weg zum PDF
+     freigeschaltet: Nach dem Laden erscheint statt des Knopfes ein
+     Verweis, den man antippt. Ein automatisch geöffnetes Fenster wäre
+     hier blockiert, weil das Laden Sekunden dauert. */
+  const [urls, setUrls] = useState({});
+
   async function drucken(eintrag) {
     setDruckt(eintrag.id);
     try {
-      await onDrucken(eintrag.lexware_id);
+      const url = await onDrucken(eintrag.lexware_id);
+      if (istTouch && url) setUrls(alt => ({ ...alt, [eintrag.id]: url }));
     } catch (e) {
       setFehler(e.message);
     } finally {
@@ -946,9 +981,17 @@ function Protokoll({ onDrucken, mitarbeiter }) {
             </span>
           </div>
           {e.status === "erstellt" && e.lexware_id ? (
-            <Knopf art="geist" klein disabled={druckt === e.id} onClick={() => drucken(e)}>
-              {druckt === e.id ? "Lädt…" : "Drucken"}
-            </Knopf>
+            urls[e.id] ? (
+              <a href={urls[e.id]} target="_blank" rel="noreferrer"
+                 className="inline-flex items-center justify-center rounded-xl font-semibold px-3.5 py-2
+                            min-h-10 text-sm bg-accent hover:bg-accent2 text-white transition shrink-0">
+                PDF öffnen
+              </a>
+            ) : (
+              <Knopf art="geist" klein disabled={druckt === e.id} onClick={() => drucken(e)}>
+                {druckt === e.id ? "Lädt…" : istTouch ? "PDF laden" : "Drucken"}
+              </Knopf>
+            )
           ) : (
             <span className="text-sm text-bad">Fehler</span>
           )}
@@ -1115,7 +1158,7 @@ function Anwendung() {
 
   async function pdfHolenUndDrucken(lexwareId) {
     const d = await lexware("pdf", { id: lexwareId });
-    return pdfAnzeigen(d.pdf);
+    return pdfBereitstellen(d.pdf);
   }
 
   async function absenden() {
