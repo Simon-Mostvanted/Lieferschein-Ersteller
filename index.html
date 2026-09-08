@@ -1,0 +1,1295 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f172a">
+<title>Lieferschein-Maske</title>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+
+<style type="text/tailwindcss">
+  @theme {
+    /* Hausfarben, identisch zur Auftragsübersicht und zum Artikelmanager. */
+    --color-bg:      #0f172a;
+    --color-panel:   #1e293b;
+    --color-panel2:  #273449;
+    --color-line:    #334155;
+    --color-line2:   #3f4d63;
+    --color-text:    #e2e8f0;
+    --color-muted:   #94a3b8;
+    --color-accent:  #3b82f6;
+    --color-accent2: #2563eb;
+    --color-ok:      #22c55e;
+    --color-warn:    #f59e0b;
+    --color-bad:     #ef4444;
+    --color-chip:    #0b1220;
+  }
+</style>
+
+<style>
+  /* Diese Anwendung läuft am Büro-PC, nicht am Werkstatt-Tablet.
+     Deshalb normale Schriftgröße statt der 17px von dort. */
+  html { font-size: 16px; }
+  body {
+    margin: 0;
+    background: #0f172a;
+    color: #e2e8f0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  input, select, textarea { font-family: inherit; }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number] { -moz-appearance: textfield; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+  .spin { animation: sp .7s linear infinite; }
+  /* Der Druckrahmen bleibt unsichtbar - er transportiert nur das PDF. */
+  #druckrahmen { position: fixed; width: 0; height: 0; border: 0; visibility: hidden; }
+</style>
+</head>
+<body>
+
+<!-- Auffangnetz: Wenn beim Laden etwas schiefgeht, soll niemand vor einer
+     weißen Seite sitzen, sondern den Grund sehen. -->
+<div id="fehler" style="display:none;padding:24px;font-family:system-ui;color:#fca5a5">
+  <h2 style="margin:0 0 8px">Die Anwendung konnte nicht geladen werden.</h2>
+  <p style="color:#94a3b8;margin:0 0 12px">
+    Meist fehlt die Internetverbindung (React, Tailwind und Supabase werden beim
+    Start nachgeladen). Sonst hilft: Seite neu laden.
+  </p>
+  <pre id="fehlerText" style="white-space:pre-wrap;background:#0b1220;border:1px solid #334155;padding:12px;border-radius:8px;font-size:13px"></pre>
+</div>
+
+<div id="root"></div>
+<iframe id="druckrahmen"></iframe>
+
+<script>
+  window.addEventListener('error', function (e) {
+    var box = document.getElementById('fehler');
+    var txt = document.getElementById('fehlerText');
+    if (box && txt) {
+      box.style.display = 'block';
+      txt.textContent = (e.message || 'Unbekannter Fehler') +
+        (e.filename ? '\n' + e.filename + ':' + e.lineno : '');
+    }
+  });
+</script>
+
+<script type="text/babel" data-presets="react">
+/* =====================================================================
+   Lieferschein-Maske
+   ---------------------------------------------------------------------
+   Eine Datei, keine Installation. Damit legen berechtigte Mitarbeiter
+   ohne eigenen Lexware-Zugang einen Lieferschein an, der direkt final
+   in Lexware Office entsteht und im Browser gedruckt wird.
+
+   Der Lexware-Schlüssel liegt NICHT hier, sondern als Secret in der
+   Supabase Edge Function `lieferschein` (edge-function/lieferschein).
+   Diese Datei kennt nur die Adresse der Funktion.
+
+   Protokoll in Supabase, Schema `lieferscheine`
+   (siehe Lieferschein-Supabase-Setup.sql).
+   ===================================================================== */
+
+/* ---------- Einstellungen ------------------------------------------- */
+
+const SUPABASE_URL = "https://vmxucwenjpwrjpeqcuhc.supabase.co";
+const SUPABASE_KEY = "sb_publishable_bKycBdawzkSItE7G0YVamQ_ikkJMm0j";
+
+/* Hausübliche Texte, abgeschaut an euren bestehenden Lieferscheinen.
+   Ohne sie sähen die aus der Maske anders aus als die gewohnten. */
+const EINLEITUNG_STANDARD = "Wie vereinbart liefern wir euch:";
+const SCHLUSSTEXT_STANDARD =
+  "Die Ware wurde ordnungsgemäß übergeben. Wir bitten Sie, die Lieferung " +
+  "innerhalb von 5 Werktagen auf Vollständigkeit zu prüfen. Nach Ablauf " +
+  "dieser Frist können Nachsendungen oder Reklamationen aufgrund fehlender " +
+  "Teile nicht mehr berücksichtigt werden.\n\n\n" +
+  "Ware entgegen genommen:_________________________________________________________________ " +
+  "(Unterschrift, Name und Datum)";
+
+const BELEGARTEN = [
+  { wert: "keiner",              titel: "Ohne Vorbeleg" },
+  { wert: "angebot",             titel: "Angebot" },
+  { wert: "auftragsbestaetigung", titel: "Auftragsbestätigung" },
+  { wert: "rechnung",            titel: "Rechnung" }
+];
+
+const EINHEITEN = ["Stück", "m", "m²", "kg", "Satz", "Set", "Paar", "Liter", "Pauschal"];
+
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+  db: { schema: "lieferscheine" },
+  auth: { persistSession: false, autoRefreshToken: false }
+});
+
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+
+/* ---------- Kleine Helfer ------------------------------------------- */
+
+function datumText(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function datumZeitText(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + ", " +
+         d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+}
+
+function mengeText(menge) {
+  const zahl = Number(menge) || 0;
+  return zahl.toLocaleString("de-DE", { maximumFractionDigits: 3 });
+}
+
+let schluesselZaehler = 0;
+function neuerSchluessel() { return ++schluesselZaehler; }
+
+function leereZeile(art) {
+  return {
+    schluessel: neuerSchluessel(),
+    art: art || "frei",     // artikel | frei | text
+    lexwareId: null,
+    nummer: null,
+    name: "",
+    beschreibung: "",
+    menge: 1,
+    einheit: "Stück"
+  };
+}
+
+/**
+ * Ruft die Edge Function auf. Sie ist das einzige Tor zu Lexware -
+ * von hier aus geht kein Aufruf direkt dorthin.
+ */
+async function lexware(aktion, nutzlast) {
+  const { data, error } = await db.functions.invoke("lieferschein", {
+    body: { aktion, ...(nutzlast || {}) }
+  });
+
+  if (error) {
+    /* Die Funktion legt ihre Begründung in den Antwortkörper. Supabase
+       reicht bei einem Fehlercode nur "non-2xx" durch - den eigentlichen
+       Grund holen wir hier heraus, sonst steht in der Maske nichts
+       Brauchbares. */
+    let grund = error.message || "Die Verbindung zu Lexware ist gescheitert.";
+    try {
+      const koerper = await error.context.json();
+      if (koerper && koerper.fehler) grund = koerper.fehler;
+    } catch (e) { /* dann bleibt es bei der allgemeinen Meldung */ }
+    throw new Error(grund);
+  }
+  if (data && data.fehler) throw new Error(data.fehler);
+  return data;
+}
+
+/** Base64 aus der Funktion in ein druckbares PDF verwandeln. */
+function pdfAnzeigen(base64) {
+  const roh = atob(base64);
+  const bytes = new Uint8Array(roh.length);
+  for (let i = 0; i < roh.length; i++) bytes[i] = roh.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+
+  /* Der Druckdialog wird über einen unsichtbaren Rahmen ausgelöst.
+     Wichtig: Das passiert im Anschluss an einen Klick, sonst greift der
+     Popup-Blocker. */
+  const rahmen = document.getElementById("druckrahmen");
+  rahmen.src = url;
+  rahmen.onload = () => {
+    try {
+      rahmen.contentWindow.focus();
+      rahmen.contentWindow.print();
+    } catch (e) {
+      /* Manche Browser verweigern das. Dann bleibt der Knopf
+         "PDF öffnen" als Weg. */
+    }
+  };
+  return url;
+}
+
+
+/* ---------- Bausteine ----------------------------------------------- */
+
+function Knopf({ art = "primaer", klein = false, className = "", ...rest }) {
+  const basis = "inline-flex items-center justify-center gap-2 rounded-xl font-semibold " +
+                "transition select-none disabled:opacity-40 disabled:cursor-not-allowed";
+  const groesse = klein ? "px-3.5 py-2 text-sm min-h-10" : "px-5 py-3 text-base min-h-12";
+  const arten = {
+    primaer:  "bg-accent hover:bg-accent2 text-white",
+    still:    "bg-panel2 border border-line2 text-text hover:border-accent",
+    geist:    "bg-transparent border border-line2 text-muted hover:text-text hover:border-accent",
+    gut:      "bg-ok hover:brightness-110 text-[#052e16]",
+    warnung:  "bg-warn hover:brightness-110 text-[#431407]",
+    gefahr:   "bg-bad hover:brightness-110 text-white"
+  };
+  return <button className={basis + " " + groesse + " " + arten[art] + " " + className} {...rest} />;
+}
+
+function Feld({ label, hinweis, children }) {
+  return (
+    <label className="block">
+      <span className="block text-xs text-muted mb-1.5 font-medium">{label}</span>
+      {children}
+      {hinweis ? <span className="block text-xs text-muted mt-1">{hinweis}</span> : null}
+    </label>
+  );
+}
+
+const eingabeKlasse =
+  "w-full bg-chip border border-line rounded-xl px-3.5 py-2.5 text-base text-text " +
+  "outline-none focus:border-accent placeholder:text-muted/60";
+
+function Lade({ text = "Lädt…" }) {
+  return (
+    <div className="flex items-center gap-3 text-muted py-8 justify-center">
+      <span className="spin inline-block w-5 h-5 border-2 border-line2 border-t-accent rounded-full"></span>
+      {text}
+    </div>
+  );
+}
+
+function Dialog({ titel, unterzeile, onSchliessen, children, breit = false }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-6"
+         onClick={onSchliessen}>
+      <div className={"bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full " +
+                      (breit ? "sm:max-w-3xl" : "sm:max-w-xl") +
+                      " max-h-[92vh] overflow-y-auto shadow-2xl"}
+           onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-panel border-b border-line px-6 py-4 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold">{titel}</h2>
+            {unterzeile ? <p className="text-sm text-muted mt-0.5">{unterzeile}</p> : null}
+          </div>
+          <button onClick={onSchliessen}
+                  className="text-muted hover:text-text text-2xl leading-none px-2 -mr-2"
+                  aria-label="Schließen">×</button>
+        </div>
+        <div className="px-6 py-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Abschnitt({ nummer, titel, hinweis, children }) {
+  return (
+    <section className="bg-panel border border-line rounded-2xl p-5 mb-4">
+      <div className="flex items-baseline gap-3 mb-4">
+        <span className="w-7 h-7 shrink-0 rounded-full bg-panel2 border border-line2
+                         text-sm font-bold flex items-center justify-center">{nummer}</span>
+        <div>
+          <h2 className="font-bold">{titel}</h2>
+          {hinweis ? <p className="text-sm text-muted mt-0.5">{hinweis}</p> : null}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Hinweisbox({ art = "warn", children }) {
+  const stil = art === "bad"
+    ? "bg-bad/10 border-bad/40 text-bad"
+    : art === "ok"
+      ? "bg-ok/10 border-ok/40 text-ok"
+      : "bg-warn/10 border-warn/40 text-warn";
+  return (
+    <div className={"border rounded-xl px-4 py-3 text-sm " + stil}>{children}</div>
+  );
+}
+
+
+/* ---------- Namensauswahl ------------------------------------------- */
+/**
+ * Wie in der Auftragsübersicht: kein Login, aber ohne Namen geht nichts.
+ * Der Name wird protokolliert - anonyme Lieferscheine wären genau das,
+ * was die Maske verhindern soll.
+ */
+function NamensAuswahl({ mitarbeiter, letzterName, onWahl }) {
+  const letzter = mitarbeiter.find(m => m.name === letzterName);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="w-full max-w-2xl text-center">
+        <div className="text-4xl mb-3">📄</div>
+        <h1 className="text-2xl font-bold">Wer erstellt den Lieferschein?</h1>
+        <p className="text-muted mt-2 mb-8">
+          Der Name wird zu jedem Lieferschein protokolliert.
+        </p>
+
+        {letzter ? (
+          <button onClick={() => onWahl(letzter)}
+                  className="w-full mb-6 bg-panel border border-line2 rounded-2xl px-6 py-4
+                             text-left hover:border-accent transition">
+            <span className="text-muted text-sm">Zuletzt hier</span>
+            <span className="block text-lg font-semibold">↩ Weiter als {letzter.name}</span>
+          </button>
+        ) : null}
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          {mitarbeiter.map(m => (
+            <button key={m.id} onClick={() => onWahl(m)}
+                    className="bg-panel border border-line rounded-2xl px-6 py-6 text-lg font-bold
+                               hover:border-accent hover:bg-panel2 transition active:scale-[0.98]">
+              {m.name}
+            </button>
+          ))}
+        </div>
+
+        {mitarbeiter.length === 0 ? (
+          <p className="text-muted mt-6">
+            Es sind noch keine Mitarbeiter hinterlegt. Sie kommen aus der
+            Auftragsübersicht (Tabelle <code>werkstatt.mitarbeiter</code>).
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+
+/* ---------- Schritt 1: Vorbeleg -------------------------------------- */
+
+function VorbelegWahl({ bezugTyp, setBezugTyp, vorbeleg, onUebernehmen, onLoesen }) {
+  const [liste, setListe] = useState([]);
+  const [laedt, setLaedt] = useState(false);
+  const [fehler, setFehler] = useState("");
+  const [suche, setSuche] = useState("");
+
+  useEffect(() => {
+    if (bezugTyp === "keiner") { setListe([]); return; }
+    let abgebrochen = false;
+    setLaedt(true); setFehler("");
+    lexware("vorbelege", { typ: bezugTyp })
+      .then(d => { if (!abgebrochen) setListe(d.treffer || []); })
+      .catch(e => { if (!abgebrochen) setFehler(e.message); })
+      .finally(() => { if (!abgebrochen) setLaedt(false); });
+    return () => { abgebrochen = true; };
+  }, [bezugTyp]);
+
+  const gefiltert = useMemo(() => {
+    const s = suche.trim().toLowerCase();
+    if (!s) return liste;
+    return liste.filter(b =>
+      (b.nummer || "").toLowerCase().includes(s) ||
+      (b.kunde || "").toLowerCase().includes(s));
+  }, [liste, suche]);
+
+  return (
+    <Abschnitt nummer="1" titel="Vorbeleg"
+               hinweis="Optional. Übernimmt Empfänger und Positionen — die Bezugsnummer erscheint nicht automatisch auf dem Lieferschein.">
+      <div className="flex flex-wrap gap-2 mb-4">
+        {BELEGARTEN.map(a => (
+          <button key={a.wert}
+                  onClick={() => { setBezugTyp(a.wert); onLoesen(); }}
+                  className={"px-4 py-2 rounded-xl text-sm font-semibold border transition " +
+                    (bezugTyp === a.wert
+                      ? "bg-accent border-accent text-white"
+                      : "bg-panel2 border-line2 text-muted hover:text-text hover:border-accent")}>
+            {a.titel}
+          </button>
+        ))}
+      </div>
+
+      {bezugTyp === "keiner" ? (
+        <p className="text-sm text-muted">
+          Empfänger und Positionen werden frei erfasst.
+        </p>
+      ) : vorbeleg ? (
+        <div className="flex items-center justify-between gap-4 bg-panel2 border border-ok/40 rounded-xl px-4 py-3">
+          <div>
+            <span className="font-semibold">{vorbeleg.nummer}</span>
+            <span className="text-muted"> · {vorbeleg.kunde}</span>
+            <span className="block text-sm text-muted mt-0.5">
+              {vorbeleg.anzahl} Positionen übernommen
+            </span>
+          </div>
+          <Knopf art="geist" klein onClick={onLoesen}>Lösen</Knopf>
+        </div>
+      ) : (
+        <div>
+          <input className={eingabeKlasse + " mb-3"} value={suche}
+                 onChange={e => setSuche(e.target.value)}
+                 placeholder="Nach Belegnummer oder Kunde filtern…" />
+
+          {fehler ? <Hinweisbox art="bad">{fehler}</Hinweisbox> : null}
+          {laedt ? <Lade text="Belege werden geladen…" /> : null}
+
+          {!laedt && !fehler ? (
+            <div className="max-h-72 overflow-y-auto border border-line rounded-xl divide-y divide-line">
+              {gefiltert.map(b => (
+                <button key={b.id} onClick={() => onUebernehmen(b)}
+                        className="w-full text-left px-4 py-3 hover:bg-panel2 transition flex justify-between gap-4">
+                  <span>
+                    <span className="font-semibold">{b.nummer}</span>
+                    <span className="block text-sm text-muted">{b.kunde}</span>
+                  </span>
+                  <span className="text-sm text-muted shrink-0">{datumText(b.datum)}</span>
+                </button>
+              ))}
+              {gefiltert.length === 0 ? (
+                <p className="px-4 py-6 text-sm text-muted text-center">
+                  Nichts gefunden. Es werden die 25 neuesten Belege geladen.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Abschnitt>
+  );
+}
+
+
+/* ---------- Schritt 2: Empfänger ------------------------------------- */
+
+const LEERE_ADRESSE = { name: "", supplement: "", street: "", zip: "", city: "", countryCode: "DE" };
+
+function EmpfaengerWahl({ typ, setTyp, kontakt, setKontakt, adresse, setAdresse }) {
+  const [suche, setSuche] = useState("");
+  const [treffer, setTreffer] = useState([]);
+  const [laedt, setLaedt] = useState(false);
+  const [fehler, setFehler] = useState("");
+
+  /* Lexware verlangt mindestens drei Zeichen und verträgt nur zwei
+     Anfragen je Sekunde - deshalb erst nach einer kurzen Pause suchen. */
+  useEffect(() => {
+    if (typ !== "kontakt" || kontakt) return;
+    const s = suche.trim();
+    if (s.length < 3) { setTreffer([]); return; }
+
+    let abgebrochen = false;
+    const zeit = setTimeout(() => {
+      setLaedt(true); setFehler("");
+      lexware("kontakte", { suche: s })
+        .then(d => { if (!abgebrochen) setTreffer(d.treffer || []); })
+        .catch(e => { if (!abgebrochen) setFehler(e.message); })
+        .finally(() => { if (!abgebrochen) setLaedt(false); });
+    }, 450);
+
+    return () => { abgebrochen = true; clearTimeout(zeit); };
+  }, [suche, typ, kontakt]);
+
+  function adresseFeld(feld, wert) {
+    setAdresse({ ...adresse, [feld]: wert });
+  }
+
+  return (
+    <Abschnitt nummer="2" titel="Empfänger">
+      <div className="flex gap-2 mb-4">
+        <button onClick={() => setTyp("kontakt")}
+                className={"px-4 py-2 rounded-xl text-sm font-semibold border transition " +
+                  (typ === "kontakt" ? "bg-accent border-accent text-white"
+                                     : "bg-panel2 border-line2 text-muted hover:text-text")}>
+          Lexware-Kontakt
+        </button>
+        <button onClick={() => setTyp("einmaladresse")}
+                className={"px-4 py-2 rounded-xl text-sm font-semibold border transition " +
+                  (typ === "einmaladresse" ? "bg-accent border-accent text-white"
+                                           : "bg-panel2 border-line2 text-muted hover:text-text")}>
+          Einmaladresse
+        </button>
+      </div>
+
+      {typ === "kontakt" ? (
+        kontakt ? (
+          <div className="flex items-center justify-between gap-4 bg-panel2 border border-ok/40 rounded-xl px-4 py-3">
+            <div>
+              <span className="font-semibold">{kontakt.name}</span>
+              {kontakt.nummer ? <span className="text-muted"> · Kd-Nr. {kontakt.nummer}</span> : null}
+              {kontakt.adresse ? (
+                <span className="block text-sm text-muted mt-0.5">
+                  {kontakt.adresse.street}, {kontakt.adresse.zip} {kontakt.adresse.city}
+                </span>
+              ) : null}
+            </div>
+            <Knopf art="geist" klein onClick={() => { setKontakt(null); setSuche(""); }}>Ändern</Knopf>
+          </div>
+        ) : (
+          <div>
+            <input className={eingabeKlasse} value={suche} autoFocus
+                   onChange={e => setSuche(e.target.value)}
+                   placeholder="Kundenname, mindestens 3 Zeichen…" />
+            {fehler ? <div className="mt-3"><Hinweisbox art="bad">{fehler}</Hinweisbox></div> : null}
+            {laedt ? <Lade text="Suche…" /> : null}
+            {treffer.length > 0 ? (
+              <div className="mt-3 max-h-64 overflow-y-auto border border-line rounded-xl divide-y divide-line">
+                {treffer.map(k => (
+                  <button key={k.id} onClick={() => setKontakt(k)}
+                          className="w-full text-left px-4 py-3 hover:bg-panel2 transition">
+                    <span className="font-semibold">{k.name}</span>
+                    {k.adresse ? (
+                      <span className="block text-sm text-muted">
+                        {k.adresse.street}, {k.adresse.zip} {k.adresse.city}
+                      </span>
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {!laedt && suche.trim().length >= 3 && treffer.length === 0 && !fehler ? (
+              <p className="text-sm text-muted mt-3">
+                Kein Kontakt gefunden. Für einen einmaligen Empfänger oben auf
+                „Einmaladresse“ wechseln.
+              </p>
+            ) : null}
+          </div>
+        )
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <Feld label="Name">
+              <input className={eingabeKlasse} value={adresse.name}
+                     onChange={e => adresseFeld("name", e.target.value)}
+                     placeholder="Firma oder Person" />
+            </Feld>
+          </div>
+          <div className="sm:col-span-2">
+            <Feld label="Zusatz" hinweis="Optional, z. B. Ansprechpartner oder Abteilung">
+              <input className={eingabeKlasse} value={adresse.supplement}
+                     onChange={e => adresseFeld("supplement", e.target.value)} />
+            </Feld>
+          </div>
+          <div className="sm:col-span-2">
+            <Feld label="Straße und Nummer">
+              <input className={eingabeKlasse} value={adresse.street}
+                     onChange={e => adresseFeld("street", e.target.value)} />
+            </Feld>
+          </div>
+          <Feld label="PLZ">
+            <input className={eingabeKlasse} value={adresse.zip}
+                   onChange={e => adresseFeld("zip", e.target.value)} />
+          </Feld>
+          <Feld label="Ort">
+            <input className={eingabeKlasse} value={adresse.city}
+                   onChange={e => adresseFeld("city", e.target.value)} />
+          </Feld>
+          <div className="sm:col-span-2">
+            <p className="text-sm text-muted">
+              Die Einmaladresse gilt nur für diesen Lieferschein und wird nicht
+              in die Lexware-Kontakte übernommen.
+            </p>
+          </div>
+        </div>
+      )}
+    </Abschnitt>
+  );
+}
+
+
+/* ---------- Schritt 3: Positionen ------------------------------------ */
+
+function ArtikelSuche({ artikel, laedtArtikel, onWahl, onAbbruch }) {
+  const [suche, setSuche] = useState("");
+
+  const treffer = useMemo(() => {
+    const s = suche.trim().toLowerCase();
+    if (!s) return [];
+    return artikel.filter(a =>
+      a.titel.toLowerCase().includes(s) ||
+      (a.nummer || "").toLowerCase().includes(s)
+    ).slice(0, 30);
+  }, [artikel, suche]);
+
+  return (
+    <div className="bg-chip border border-line2 rounded-xl p-3">
+      <div className="flex gap-2 mb-2">
+        <input className={eingabeKlasse} value={suche} autoFocus
+               onChange={e => setSuche(e.target.value)}
+               placeholder="Artikel suchen…" />
+        <Knopf art="geist" klein onClick={onAbbruch}>Abbrechen</Knopf>
+      </div>
+
+      {laedtArtikel ? (
+        <Lade text="Artikelstamm wird geladen…" />
+      ) : treffer.length > 0 ? (
+        <div className="max-h-56 overflow-y-auto divide-y divide-line">
+          {treffer.map(a => (
+            <button key={a.id} onClick={() => onWahl(a)}
+                    className="w-full text-left px-2 py-2 hover:bg-panel2 rounded transition">
+              <span className="font-medium">{a.titel}</span>
+              <span className="block text-xs text-muted">
+                {a.nummer ? "Nr. " + a.nummer + " · " : ""}{a.einheit || "Stück"}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : suche.trim() ? (
+        <p className="text-sm text-muted px-2 py-3">
+          Nichts gefunden. Der Artikel lässt sich auch als freie Zeile erfassen.
+        </p>
+      ) : (
+        <p className="text-sm text-muted px-2 py-3">
+          {artikel.length} Artikel durchsuchbar.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PositionsZeile({ zeile, artikel, laedtArtikel, onAendern, onEntfernen, onHoch, onRunter }) {
+  const [sucheOffen, setSucheOffen] = useState(zeile.art === "artikel" && !zeile.name);
+
+  function setzen(feld, wert) { onAendern({ ...zeile, [feld]: wert }); }
+
+  function artikelUebernehmen(a) {
+    /* Der Brief will Artikelnummer und Bezeichnung übernehmen. Die Zeile
+       geht als freie Position nach Lexware - genauso wie in euren
+       bestehenden Lieferscheinen mit 0,00 €. Ein Verweis auf den
+       Artikelstamm brächte auf dem Papier nichts und würde Preise
+       mitschleppen. */
+    onAendern({
+      ...zeile,
+      art: "artikel",
+      lexwareId: a.id,
+      nummer: a.nummer,
+      name: a.titel,
+      einheit: a.einheit || "Stück"
+    });
+    setSucheOffen(false);
+  }
+
+  const istText = zeile.art === "text";
+
+  return (
+    <div className="bg-panel2 border border-line2 rounded-xl p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <div className="flex gap-1">
+          {[["artikel", "Artikel"], ["frei", "Frei"], ["text", "Überschrift"]].map(([wert, titel]) => (
+            <button key={wert}
+                    onClick={() => {
+                      onAendern({ ...zeile, art: wert, lexwareId: null, nummer: null });
+                      setSucheOffen(wert === "artikel");
+                    }}
+                    className={"px-2.5 py-1 rounded-lg text-xs font-semibold border transition " +
+                      (zeile.art === wert ? "bg-accent border-accent text-white"
+                                          : "bg-chip border-line text-muted hover:text-text")}>
+              {titel}
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto flex gap-1">
+          <button onClick={onHoch} className="text-muted hover:text-text px-2 py-1" title="Nach oben">↑</button>
+          <button onClick={onRunter} className="text-muted hover:text-text px-2 py-1" title="Nach unten">↓</button>
+          <button onClick={onEntfernen} className="text-muted hover:text-bad px-2 py-1" title="Zeile entfernen">✕</button>
+        </div>
+      </div>
+
+      {zeile.art === "artikel" && sucheOffen ? (
+        <ArtikelSuche artikel={artikel} laedtArtikel={laedtArtikel}
+                      onWahl={artikelUebernehmen}
+                      onAbbruch={() => setSucheOffen(false)} />
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-12">
+          <div className={istText ? "sm:col-span-12" : "sm:col-span-7"}>
+            <input className={eingabeKlasse} value={zeile.name}
+                   onChange={e => setzen("name", e.target.value)}
+                   placeholder={istText ? "Überschrift oder Hinweiszeile" : "Bezeichnung"} />
+            {zeile.nummer ? (
+              <span className="block text-xs text-muted mt-1">Artikelnummer {zeile.nummer}</span>
+            ) : null}
+          </div>
+
+          {!istText ? (
+            <>
+              <div className="sm:col-span-2">
+                <input className={eingabeKlasse} type="number" step="any" min="0"
+                       value={zeile.menge}
+                       onChange={e => setzen("menge", e.target.value)}
+                       placeholder="Menge" />
+              </div>
+              <div className="sm:col-span-3">
+                <input className={eingabeKlasse} list="einheiten" value={zeile.einheit}
+                       onChange={e => setzen("einheit", e.target.value)}
+                       placeholder="Einheit" />
+              </div>
+            </>
+          ) : null}
+
+          <div className="sm:col-span-12">
+            <input className={eingabeKlasse + " text-sm"} value={zeile.beschreibung}
+                   onChange={e => setzen("beschreibung", e.target.value)}
+                   placeholder="Ergänzung (optional)" />
+          </div>
+
+          {zeile.art === "artikel" ? (
+            <div className="sm:col-span-12">
+              <Knopf art="geist" klein onClick={() => setSucheOffen(true)}>
+                Anderen Artikel wählen
+              </Knopf>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Positionen({ zeilen, setZeilen, artikel, laedtArtikel, artikelLaden }) {
+  function aendern(index, neu) {
+    setZeilen(zeilen.map((z, i) => i === index ? neu : z));
+  }
+  function entfernen(index) {
+    setZeilen(zeilen.filter((_, i) => i !== index));
+  }
+  function schieben(index, richtung) {
+    const ziel = index + richtung;
+    if (ziel < 0 || ziel >= zeilen.length) return;
+    const kopie = zeilen.slice();
+    const [raus] = kopie.splice(index, 1);
+    kopie.splice(ziel, 0, raus);
+    setZeilen(kopie);
+  }
+
+  const mitMenge = zeilen.filter(z => z.art !== "text").length;
+
+  return (
+    <Abschnitt nummer="3" titel="Positionen"
+               hinweis="Auf dem Lieferschein stehen keine Preise — nur Bezeichnung und Menge.">
+      <div className="grid gap-3">
+        {zeilen.map((z, i) => (
+          <PositionsZeile key={z.schluessel} zeile={z}
+                          artikel={artikel} laedtArtikel={laedtArtikel}
+                          onAendern={neu => aendern(i, neu)}
+                          onEntfernen={() => entfernen(i)}
+                          onHoch={() => schieben(i, -1)}
+                          onRunter={() => schieben(i, 1)} />
+        ))}
+      </div>
+
+      {zeilen.length === 0 ? (
+        <p className="text-sm text-muted py-4 text-center">Noch keine Position.</p>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2 mt-4">
+        <Knopf art="still" klein onClick={() => { artikelLaden(); setZeilen([...zeilen, leereZeile("artikel")]); }}>
+          + Artikel
+        </Knopf>
+        <Knopf art="still" klein onClick={() => setZeilen([...zeilen, leereZeile("frei")])}>
+          + Freie Zeile
+        </Knopf>
+        <Knopf art="geist" klein onClick={() => setZeilen([...zeilen, leereZeile("text")])}>
+          + Überschrift
+        </Knopf>
+        <span className="ml-auto self-center text-sm text-muted">
+          {mitMenge} {mitMenge === 1 ? "Position" : "Positionen"}
+        </span>
+      </div>
+
+      <datalist id="einheiten">
+        {EINHEITEN.map(e => <option key={e} value={e} />)}
+      </datalist>
+    </Abschnitt>
+  );
+}
+
+
+/* ---------- Prüfvorschau --------------------------------------------- */
+/**
+ * Pflicht vor dem Absenden. Ein finalisierter Lieferschein lässt sich in
+ * Lexware nicht mehr ändern - es gibt keinen Update-Endpunkt. Was hier
+ * steht, steht endgültig.
+ */
+function Vorschau({ beleg, anzeige, ersteller, sendet, fehler, onAbsenden, onSchliessen }) {
+  return (
+    <Dialog titel="Prüfen und absenden" breit
+            unterzeile="Nach dem Absenden lässt sich der Lieferschein nicht mehr ändern."
+            onSchliessen={sendet ? () => {} : onSchliessen}>
+
+      <div className="bg-chip border border-line rounded-xl p-5 mb-4">
+        <div className="text-sm text-muted mb-1">Empfänger</div>
+        <div className="font-semibold">{anzeige.name}</div>
+        {anzeige.supplement ? <div>{anzeige.supplement}</div> : null}
+        {anzeige.street ? <div>{anzeige.street}</div> : null}
+        {anzeige.zip || anzeige.city ? <div>{anzeige.zip} {anzeige.city}</div> : null}
+        {anzeige.ausLexware ? (
+          <div className="text-xs text-muted mt-1">
+            Anschrift kommt aus dem Lexware-Kontakt und steht so auf dem Beleg.
+          </div>
+        ) : null}
+
+        {beleg.introduction ? (
+          <div className="mt-4 pt-4 border-t border-line whitespace-pre-wrap">{beleg.introduction}</div>
+        ) : null}
+
+        <table className="w-full mt-4 text-sm">
+          <tbody>
+            {beleg.lineItems.map((z, i) => (
+              z.type === "text" ? (
+                <tr key={i}>
+                  <td colSpan="2" className="pt-3 pb-1 font-semibold">{z.name}</td>
+                </tr>
+              ) : (
+                <tr key={i} className="border-t border-line/60">
+                  <td className="py-1.5 pr-4">
+                    {z.name}
+                    {z.description ? <span className="block text-xs text-muted">{z.description}</span> : null}
+                  </td>
+                  <td className="py-1.5 text-right whitespace-nowrap">
+                    {mengeText(z.quantity)} {z.unitName}
+                  </td>
+                </tr>
+              )
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="text-sm text-muted mb-4">
+        Wird protokolliert als: <span className="text-text font-medium">{ersteller.name}</span>
+      </p>
+
+      {fehler ? <div className="mb-4"><Hinweisbox art="bad">{fehler}</Hinweisbox></div> : null}
+
+      <div className="flex gap-3">
+        <Knopf onClick={onAbsenden} disabled={sendet} className="flex-1">
+          {sendet
+            ? <><span className="spin inline-block w-4 h-4 border-2 border-white/40 border-t-white rounded-full"></span> Wird angelegt…</>
+            : "Verbindlich anlegen und drucken"}
+        </Knopf>
+        <Knopf art="geist" onClick={onSchliessen} disabled={sendet}>Zurück</Knopf>
+      </div>
+    </Dialog>
+  );
+}
+
+
+/* ---------- Ergebnis -------------------------------------------------- */
+
+function Ergebnis({ ergebnis, onNochmalDrucken, onNeu, onSchliessen }) {
+  return (
+    <Dialog titel="Lieferschein angelegt" onSchliessen={onSchliessen}>
+      <div className="text-center py-2">
+        <div className="text-4xl mb-3">✅</div>
+        <p className="text-xl font-bold">{ergebnis.nummer || "Angelegt"}</p>
+        <p className="text-muted mt-1">
+          Der Druckdialog sollte sich geöffnet haben.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2 mt-5">
+        <Knopf art="still" onClick={onNochmalDrucken}>Noch einmal drucken</Knopf>
+        {ergebnis.pdfUrl ? (
+          <a href={ergebnis.pdfUrl} target="_blank" rel="noreferrer"
+             className="inline-flex items-center justify-center gap-2 rounded-xl font-semibold px-5 py-3
+                        min-h-12 bg-transparent border border-line2 text-muted hover:text-text hover:border-accent transition">
+            PDF in neuem Tab öffnen
+          </a>
+        ) : null}
+        <Knopf onClick={onNeu}>Nächster Lieferschein</Knopf>
+      </div>
+    </Dialog>
+  );
+}
+
+
+/* ---------- Protokoll ------------------------------------------------- */
+
+function Protokoll({ onDrucken, mitarbeiter }) {
+  const [liste, setListe] = useState(null);
+  const [fehler, setFehler] = useState("");
+  const [druckt, setDruckt] = useState(null);
+
+  /* Der Name des Erstellers kommt aus der bereits geladenen Liste und
+     nicht über eine Verknüpfung: Die Mitarbeiter liegen im Schema
+     `werkstatt`, das Protokoll in `lieferscheine`. Über zwei Schemata
+     hinweg kann PostgREST nicht joinen. */
+  const namen = useMemo(() => {
+    const zuordnung = {};
+    for (const m of mitarbeiter || []) zuordnung[m.id] = m.name;
+    return zuordnung;
+  }, [mitarbeiter]);
+
+  useEffect(() => {
+    db.from("lieferschein_log")
+      .select("id, erstellt_am, ersteller_id, lexware_id, lexware_beleg_nr, empfaenger_name, bezug_beleg_nr, status")
+      .order("erstellt_am", { ascending: false })
+      .limit(50)
+      .then(({ data, error }) => {
+        if (error) setFehler(error.message); else setListe(data || []);
+      });
+  }, []);
+
+  async function drucken(eintrag) {
+    setDruckt(eintrag.id);
+    try {
+      await onDrucken(eintrag.lexware_id);
+    } catch (e) {
+      setFehler(e.message);
+    } finally {
+      setDruckt(null);
+    }
+  }
+
+  if (fehler) return <Hinweisbox art="bad">{fehler}</Hinweisbox>;
+  if (!liste) return <Lade />;
+  if (liste.length === 0) {
+    return <p className="text-muted text-center py-10">Noch kein Lieferschein über die Maske erstellt.</p>;
+  }
+
+  return (
+    <div className="border border-line rounded-2xl overflow-hidden divide-y divide-line">
+      {liste.map(e => (
+        <div key={e.id} className="flex items-center gap-4 px-4 py-3 bg-panel">
+          <div className="min-w-0 flex-1">
+            <span className="font-semibold">{e.lexware_beleg_nr || "ohne Nummer"}</span>
+            <span className="text-muted"> · {e.empfaenger_name}</span>
+            <span className="block text-sm text-muted">
+              {datumZeitText(e.erstellt_am)} · {namen[e.ersteller_id] || "unbekannt"}
+              {e.bezug_beleg_nr ? " · aus " + e.bezug_beleg_nr : ""}
+            </span>
+          </div>
+          {e.status === "erstellt" && e.lexware_id ? (
+            <Knopf art="geist" klein disabled={druckt === e.id} onClick={() => drucken(e)}>
+              {druckt === e.id ? "Lädt…" : "Drucken"}
+            </Knopf>
+          ) : (
+            <span className="text-sm text-bad">Fehler</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+/* ---------- Die Anwendung -------------------------------------------- */
+
+function Anwendung() {
+  const [mitarbeiter, setMitarbeiter] = useState(null);
+  const [startFehler, setStartFehler] = useState("");
+  const [ich, setIch] = useState(null);
+  const [ansicht, setAnsicht] = useState("neu");
+
+  /* Formularzustand */
+  const [bezugTyp, setBezugTyp] = useState("keiner");
+  const [vorbeleg, setVorbeleg] = useState(null);
+  const [empfaengerTyp, setEmpfaengerTyp] = useState("kontakt");
+  const [kontakt, setKontakt] = useState(null);
+  const [adresse, setAdresse] = useState(LEERE_ADRESSE);
+  const [zeilen, setZeilen] = useState([]);
+  const [kopftext, setKopftext] = useState(EINLEITUNG_STANDARD);
+
+  /* Artikelstamm - wird erst geholt, wenn die erste Artikelzeile
+     entsteht. Fünf Seiten bei Lexware, das muss nicht beim Start sein. */
+  const [artikel, setArtikel] = useState([]);
+  const [laedtArtikel, setLaedtArtikel] = useState(false);
+  const artikelGeholt = useRef(false);
+
+  const [vorschauOffen, setVorschauOffen] = useState(false);
+  const [sendet, setSendet] = useState(false);
+  const [sendeFehler, setSendeFehler] = useState("");
+  const [ergebnis, setErgebnis] = useState(null);
+
+  useEffect(() => {
+    db.from("mitarbeiter").select("id, name, bereich").order("name")
+      .then(({ data, error }) => {
+        if (error) setStartFehler(error.message);
+        else setMitarbeiter(data || []);
+      });
+  }, []);
+
+  const artikelLaden = useCallback(() => {
+    if (artikelGeholt.current) return;
+    artikelGeholt.current = true;
+    setLaedtArtikel(true);
+    lexware("artikel")
+      .then(d => setArtikel(d.artikel || []))
+      .catch(() => { artikelGeholt.current = false; })
+      .finally(() => setLaedtArtikel(false));
+  }, []);
+
+  function formularLeeren() {
+    setBezugTyp("keiner"); setVorbeleg(null);
+    setEmpfaengerTyp("kontakt"); setKontakt(null); setAdresse(LEERE_ADRESSE);
+    setZeilen([]); setKopftext(EINLEITUNG_STANDARD);
+    setSendeFehler(""); setErgebnis(null);
+  }
+
+  /* Vorbeleg übernehmen. Lexware verknüpft nur - die Positionen müssen
+     wir selbst holen und mitschicken. */
+  async function vorbelegUebernehmen(kopf) {
+    try {
+      const d = await lexware("vorbeleg", { typ: bezugTyp, id: kopf.id });
+
+      if (d.adresse) {
+        if (d.adresse.contactId) {
+          setEmpfaengerTyp("kontakt");
+          setKontakt({ id: d.adresse.contactId, name: d.adresse.name, nummer: null, adresse: d.adresse });
+        } else {
+          setEmpfaengerTyp("einmaladresse");
+          setAdresse({ ...LEERE_ADRESSE, ...d.adresse });
+        }
+      }
+
+      const uebernommen = (d.positionen || []).map(p => ({
+        schluessel: neuerSchluessel(),
+        art: p.type === "text" ? "text" : "frei",
+        lexwareId: null,
+        nummer: null,
+        name: p.name || "",
+        beschreibung: p.description || "",
+        menge: p.quantity != null ? p.quantity : 1,
+        einheit: p.unitName || "Stück"
+      }));
+      setZeilen(uebernommen);
+
+      setVorbeleg({ id: kopf.id, nummer: d.nummer || kopf.nummer, kunde: kopf.kunde,
+                    anzahl: uebernommen.filter(z => z.art !== "text").length });
+    } catch (e) {
+      setSendeFehler(e.message);
+    }
+  }
+
+  /* Aus dem Formular den Lexware-Beleg bauen.
+     Bei einem Lexware-Kontakt geht NUR die Kennung hinaus. Lexware setzt
+     Name und Anschrift selbst aus dem Kontakt ein - und zwar in der
+     aktuellen Fassung. Schickten wir die Felder mit, die wir aus Suche
+     oder Vorbeleg haben, stünden dort im Zweifel leere Zeilen: Ein
+     Vorbeleg liefert oft nur Kennung und Namen, keine Straße. */
+  const beleg = useMemo(() => {
+    const ziel = empfaengerTyp === "kontakt" && kontakt
+      ? { contactId: kontakt.id }
+      : { ...adresse };
+
+    const posten = zeilen
+      .filter(z => z.name.trim())
+      .map(z => z.art === "text"
+        ? { type: "text", name: z.name.trim(), description: z.beschreibung.trim() }
+        : {
+            type: "custom",
+            name: z.name.trim(),
+            description: [z.nummer ? "Art.-Nr. " + z.nummer : "", z.beschreibung.trim()]
+              .filter(Boolean).join(" · "),
+            quantity: Number(z.menge) || 0,
+            unitName: (z.einheit || "Stück").trim()
+          });
+
+    return {
+      address: ziel,
+      lineItems: posten,
+      introduction: kopftext.trim(),
+      remark: SCHLUSSTEXT_STANDARD,
+      deliveryTerms: "keine"
+    };
+  }, [empfaengerTyp, kontakt, adresse, zeilen, kopftext]);
+
+  /* Was in der Vorschau und im Protokoll steht. Beim Kontakt ist das
+     nicht unbedingt vollständig - die Anschrift kennt nur Lexware. */
+  const anzeige = useMemo(() => {
+    if (empfaengerTyp === "kontakt" && kontakt) {
+      const a = kontakt.adresse || {};
+      return {
+        name: kontakt.name || "",
+        supplement: "",
+        street: a.street || "",
+        zip: a.zip || "",
+        city: a.city || "",
+        ausLexware: true
+      };
+    }
+    return { ...adresse, ausLexware: false };
+  }, [empfaengerTyp, kontakt, adresse]);
+
+  /* Was noch fehlt, bevor abgesendet werden darf. Der Beleg lässt sich
+     hinterher nicht korrigieren - also lieber hier hart sein. */
+  const maengel = useMemo(() => {
+    const liste = [];
+    if (!anzeige.name || !anzeige.name.trim()) liste.push("Der Empfänger fehlt.");
+    else if (empfaengerTyp === "einmaladresse" &&
+             (!adresse.street.trim() || !adresse.zip.trim() || !adresse.city.trim()))
+      liste.push("Die Einmaladresse ist unvollständig (Straße, PLZ, Ort).");
+
+    const mitMenge = beleg.lineItems.filter(z => z.type !== "text");
+    if (mitMenge.length === 0) liste.push("Es fehlt mindestens eine Position mit Menge.");
+    if (mitMenge.some(z => !(z.quantity > 0))) liste.push("Eine Position hat keine Menge.");
+    if (zeilen.some(z => !z.name.trim())) liste.push("Eine Zeile hat keine Bezeichnung.");
+    return liste;
+  }, [beleg, anzeige, adresse, empfaengerTyp, zeilen]);
+
+  async function pdfHolenUndDrucken(lexwareId) {
+    const d = await lexware("pdf", { id: lexwareId });
+    return pdfAnzeigen(d.pdf);
+  }
+
+  async function absenden() {
+    setSendet(true); setSendeFehler("");
+    try {
+      const angelegt = await lexware("anlegen", {
+        beleg,
+        vorbelegId: vorbeleg ? vorbeleg.id : null
+      });
+
+      /* Protokoll. Scheitert das, ist der Lieferschein trotzdem in der
+         Welt - deshalb bricht es den Ablauf nicht ab. */
+      try {
+        await db.from("lieferschein_log").insert({
+          ersteller_id: ich.id,
+          lexware_id: angelegt.id,
+          lexware_beleg_nr: angelegt.nummer,
+          bezug_typ: vorbeleg ? bezugTyp : "keiner",
+          bezug_lexware_id: vorbeleg ? vorbeleg.id : null,
+          bezug_beleg_nr: vorbeleg ? vorbeleg.nummer : null,
+          empfaenger_typ: empfaengerTyp,
+          empfaenger_name: anzeige.name,
+          empfaenger_kontakt_id: empfaengerTyp === "kontakt" && kontakt ? kontakt.id : null,
+          empfaenger_adresse: empfaengerTyp === "einmaladresse" ? adresse : null,
+          positionen: beleg.lineItems,
+          kopftext: beleg.introduction,
+          status: "erstellt"
+        });
+      } catch (e) { /* Protokoll ist wichtig, aber nicht kritisch */ }
+
+      let pdfUrl = null;
+      try {
+        pdfUrl = await pdfHolenUndDrucken(angelegt.id);
+      } catch (e) {
+        setSendeFehler("Der Lieferschein ist angelegt, das PDF ließ sich aber nicht laden: " + e.message);
+      }
+
+      setVorschauOffen(false);
+      setErgebnis({ id: angelegt.id, nummer: angelegt.nummer, pdfUrl });
+    } catch (e) {
+      setSendeFehler(e.message);
+    } finally {
+      setSendet(false);
+    }
+  }
+
+  /* ---------- Anzeige ---------- */
+
+  if (startFehler) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6">
+        <div className="max-w-lg text-center">
+          <div className="text-4xl mb-3">⚠️</div>
+          <h1 className="text-xl font-bold mb-2">Die Datenbank antwortet nicht</h1>
+          <p className="text-muted mb-4">{startFehler}</p>
+          <ul className="text-left text-sm text-muted list-disc pl-5 space-y-1">
+            <li>Wurde <b>Lieferschein-Supabase-Setup.sql</b> im SQL-Editor ausgeführt?</li>
+            <li>Steht <b>lieferscheine</b> unter Project Settings → API → Exposed schemas?</li>
+          </ul>
+          <Knopf art="still" className="mt-5" onClick={() => location.reload()}>Nochmal versuchen</Knopf>
+        </div>
+      </div>
+    );
+  }
+
+  if (!mitarbeiter) return <div className="min-h-screen flex items-center justify-center"><Lade /></div>;
+
+  if (!ich) {
+    return (
+      <NamensAuswahl mitarbeiter={mitarbeiter}
+                     letzterName={localStorage.getItem("lieferschein_name")}
+                     onWahl={m => { localStorage.setItem("lieferschein_name", m.name); setIch(m); }} />
+    );
+  }
+
+  return (
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-40 bg-bg/95 backdrop-blur border-b border-line">
+        <div className="max-w-4xl mx-auto px-5 py-3 flex items-center gap-4">
+          <span className="font-bold">📄 Lieferschein</span>
+
+          <nav className="flex gap-1 ml-4">
+            {[["neu", "Neu erstellen"], ["protokoll", "Zuletzt erstellt"]].map(([wert, titel]) => (
+              <button key={wert} onClick={() => setAnsicht(wert)}
+                      className={"px-3 py-1.5 rounded-lg text-sm font-semibold transition " +
+                        (ansicht === wert ? "bg-panel2 text-text" : "text-muted hover:text-text")}>
+                {titel}
+              </button>
+            ))}
+          </nav>
+
+          <button onClick={() => setIch(null)}
+                  className="ml-auto text-sm text-muted hover:text-text px-3 py-1.5 rounded-lg
+                             border border-line hover:border-accent transition">
+            {ich.name}
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-5 py-6">
+        {ansicht === "protokoll" ? (
+          <Protokoll onDrucken={pdfHolenUndDrucken} mitarbeiter={mitarbeiter} />
+        ) : (
+          <>
+            <VorbelegWahl bezugTyp={bezugTyp} setBezugTyp={setBezugTyp}
+                          vorbeleg={vorbeleg}
+                          onUebernehmen={vorbelegUebernehmen}
+                          onLoesen={() => setVorbeleg(null)} />
+
+            <EmpfaengerWahl typ={empfaengerTyp} setTyp={setEmpfaengerTyp}
+                            kontakt={kontakt} setKontakt={setKontakt}
+                            adresse={adresse} setAdresse={setAdresse} />
+
+            <Positionen zeilen={zeilen} setZeilen={setZeilen}
+                        artikel={artikel} laedtArtikel={laedtArtikel}
+                        artikelLaden={artikelLaden} />
+
+            <Abschnitt nummer="4" titel="Einleitungstext"
+                       hinweis="Hier gehören Kommission und Fahrzeug-ID hinein — eine Bezugsnummer erscheint sonst nirgends auf dem Beleg.">
+              <textarea className={eingabeKlasse} rows="3" value={kopftext}
+                        onChange={e => setKopftext(e.target.value)} />
+            </Abschnitt>
+
+            {maengel.length > 0 ? (
+              <div className="mb-4">
+                <Hinweisbox>
+                  <span className="font-semibold block mb-1">Noch nicht vollständig:</span>
+                  <ul className="list-disc pl-5 space-y-0.5">
+                    {maengel.map((m, i) => <li key={i}>{m}</li>)}
+                  </ul>
+                </Hinweisbox>
+              </div>
+            ) : null}
+
+            {sendeFehler && !vorschauOffen ? (
+              <div className="mb-4"><Hinweisbox art="bad">{sendeFehler}</Hinweisbox></div>
+            ) : null}
+
+            <div className="flex gap-3">
+              <Knopf className="flex-1" disabled={maengel.length > 0}
+                     onClick={() => { setSendeFehler(""); setVorschauOffen(true); }}>
+                Prüfen und absenden
+              </Knopf>
+              <Knopf art="geist" onClick={formularLeeren}>Verwerfen</Knopf>
+            </div>
+          </>
+        )}
+      </main>
+
+      {vorschauOffen ? (
+        <Vorschau beleg={beleg} anzeige={anzeige} ersteller={ich} sendet={sendet} fehler={sendeFehler}
+                  onAbsenden={absenden}
+                  onSchliessen={() => setVorschauOffen(false)} />
+      ) : null}
+
+      {ergebnis ? (
+        <Ergebnis ergebnis={ergebnis}
+                  onNochmalDrucken={() => pdfHolenUndDrucken(ergebnis.id)}
+                  onNeu={() => { formularLeeren(); setErgebnis(null); }}
+                  onSchliessen={() => setErgebnis(null)} />
+      ) : null}
+    </div>
+  );
+}
+
+
+/* ---------- Start ---------------------------------------------------- */
+
+try {
+  ReactDOM.createRoot(document.getElementById("root")).render(<Anwendung />);
+} catch (e) {
+  document.getElementById("fehler").style.display = "block";
+  document.getElementById("fehlerText").textContent = e.message || String(e);
+}
+</script>
+</body>
+</html>

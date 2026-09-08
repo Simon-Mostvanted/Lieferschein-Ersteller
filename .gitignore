@@ -1,0 +1,12 @@
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Sicherungskopien vor Design-/Umbauarbeiten
+*_backup_*.html
+
+# Nichts mit Schluesseln darin. Der Lexware-Schluessel gehoert
+# ausschliesslich in die Supabase-Secrets, niemals in dieses Repo.
+*.key
+.env
+.env.*
