@@ -59,11 +59,22 @@ und `aktiv` ist, erscheint hier.
 
 ## Starten
 
-Doppelklick auf `Start-Lieferschein.cmd`. Öffnet
-`http://localhost:8781/index.html`.
+**Im Betrieb — Handy und PC:**
+<https://simon-mostvanted.github.io/lieferschein-ersteller/>
 
-Das schwarze Fenster muss offen bleiben, solange gearbeitet wird — es *ist* der
-Server.
+Am Telefon einmal öffnen und auf den Startbildschirm legen, dann liegt sie wie
+eine App auf dem Gerät. Der gewählte Name wird pro Gerät gemerkt.
+
+**Zum Entwickeln:** Doppelklick auf `Start-Lieferschein.cmd` öffnet
+`http://localhost:8781/index.html` mit dem Stand aus diesem Ordner. Das
+schwarze Fenster muss offen bleiben — es *ist* der Server.
+
+**Ausliefern:** Änderungen committen und hochladen, GitHub Pages zieht
+automatisch nach:
+
+```
+git push
+```
 
 ## Bedienung
 
@@ -105,27 +116,34 @@ sie mit.
 
 ## Sicherheitshinweis
 
-**Diese Anwendung gehört nicht ins offene Internet — anders als die
-Auftragsübersicht.**
+**Der Lexware-Schlüssel liegt sicher.** Er steckt ausschließlich im
+Supabase-Secret, die Funktion gibt ihn nie heraus, und im Quelltext der
+HTML-Datei steht er nirgends. Daran ändert auch die Veröffentlichung nichts.
 
-Die Auftragsübersicht liegt öffentlich auf GitHub Pages. Das ist dort tragbar:
-Wer sie findet, sieht Werkstattaufträge. Hier ist der Einsatz höher. Wer die
-Adresse der Funktion kennt, kann darüber
+**Die Anwendung selbst ist offen.** Sie liegt wie die übrigen Apps öffentlich
+auf GitHub Pages, damit die Kollegen sie am Handy öffnen können. Es gibt keinen
+Login. Wer die Adresse kennt, kann darüber
 
 - eure Kontakte und den Artikelstamm lesen,
 - die letzten Angebote, Auftragsbestätigungen und Rechnungen auflisten,
 - **Lieferscheine in eurem Lexware anlegen**.
 
 Nicht möglich ist: löschen, ändern, Rechnungen im Volltext lesen, den
-Lexware-Schlüssel selbst abgreifen. Die Funktion lässt nur eine feste Liste von
+Lexware-Schlüssel abgreifen. Die Funktion lässt nur eine feste Liste von
 Aktionen zu und reicht keinen beliebigen Lexware-Pfad durch.
 
-Trotzdem: Die Maske läuft lokal über `Start-Lieferschein.cmd`, und das Repo
-gehört **auf privat** gestellt. Solange es keinen Login gibt, ist die
-Geheimhaltung der Funktionsadresse der einzige Schutz.
+**Das ist eine bewusste Entscheidung** (Simon, 2026-09-08): Die App wird im
+Firmenumfeld genutzt, der Zugriff auf Kontaktdaten wird vorerst in Kauf
+genommen, und die Erreichbarkeit am Handy hat Vorrang. Der Schutz besteht
+derzeit allein darin, dass die Adresse nicht bekannt ist.
 
-Der saubere Weg wäre ein echter Login (Supabase Auth) und *Verify JWT* an der
-Funktion. Das ist der nächste sinnvolle Ausbauschritt.
+Wenn das nicht mehr reicht, gibt es zwei Stufen:
+
+1. **Kennwort beim Absenden** — nur die Aktion „anlegen" wird geschützt, das
+   Kennwort steht nicht im Quelltext, sondern wird einmal je Gerät eingegeben.
+   Kleiner Eingriff, hält Gelegenheitsfunde ab.
+2. **Echter Login** (Supabase Auth) und *Verify JWT* an der Funktion. Dann
+   nützt die Adresse ohne Anmeldung gar nichts. Der saubere Weg.
 
 ## Noch offen
 
