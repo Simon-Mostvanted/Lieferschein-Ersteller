@@ -60,7 +60,7 @@ und `aktiv` ist, erscheint hier.
 ## Starten
 
 **Im Betrieb — Handy und PC:**
-<https://simon-mostvanted.github.io/lieferschein-ersteller/>
+<https://simon-mostvanted.github.io/Lieferschein-Ersteller/>
 
 Am Telefon einmal öffnen und auf den Startbildschirm legen, dann liegt sie wie
 eine App auf dem Gerät. Der gewählte Name wird pro Gerät gemerkt.
