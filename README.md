@@ -89,10 +89,10 @@ protokolliert; ohne Namen geht es nicht weiter.
 2. **Empfänger** — entweder ein Lexware-Kontakt (Suche ab drei Zeichen) oder
    eine Einmaladresse. Die Einmaladresse wird nicht in die Lexware-Kontakte
    zurückgeschrieben.
-3. **Positionen** — drei Sorten Zeilen: *Artikel* (Suche im Lexware-Stamm,
+3. **Einleitungstext** — hier gehören Kommission und Fahrzeug-ID hinein.
+4. **Positionen** — drei Sorten Zeilen: *Artikel* (Suche im Lexware-Stamm,
    übernimmt Nummer und Bezeichnung), *Frei* (Bezeichnung von Hand) und
    *Überschrift* (Zwischentext ohne Menge). Reihenfolge über ↑ ↓.
-4. **Einleitungstext** — hier gehören Kommission und Fahrzeug-ID hinein.
 5. **Prüfen und absenden** — die Vorschau ist Pflicht.
 
 **Nach dem Absenden ist keine Änderung mehr möglich.** Lexware kennt für
@@ -102,7 +102,14 @@ aber nicht drucken — deshalb wird direkt final angelegt.
 Unter *Zuletzt erstellt* liegen die letzten 50 Belege aus der Maske, jeder
 erneut druckbar. Das PDF wird dabei frisch aus Lexware geholt.
 
-## Zwei Dinge, die anders sind als gedacht
+## Drei Dinge, die anders sind als gedacht
+
+**Die Belegliste lässt sich nicht nach Kunden durchsuchen** — Lexware filtert
+nur nach Belegnummer und Kontakt-ID. Die Funktion holt deshalb alle Angebote,
+Auftragsbestätigungen bzw. Rechnungen der letzten zwei Jahre (ohne Entwürfe
+und Stornos), hält sie fünf Minuten vor, und gesucht wird im Browser. So
+tauchen auch Belege mit Einmaladresse auf. Bei Rechnungen ist der Lexware-Typ
+`invoice` gemeint; `salesinvoice` wären Buchhaltungsbelege.
 
 **Der Artikelstamm lässt sich bei Lexware nicht nach Namen durchsuchen** — die
 Schnittstelle kennt nur exakte Artikelnummer, GTIN und Typ. Die Funktion holt

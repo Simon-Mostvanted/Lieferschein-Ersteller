@@ -31,11 +31,18 @@ const VORBELEG_PFAD: Record<string, string> = {
   rechnung: "invoices",
 };
 
-/** Dieselbe Zuordnung für die Suchliste. */
+/**
+ * Dieselbe Zuordnung für die Suchliste.
+ *
+ * Achtung bei Rechnungen: `invoice` ist die in Lexware geschriebene
+ * Rechnung an einen Kunden. `salesinvoice` klingt richtiger, ist aber der
+ * hochgeladene Beleg in der Buchhaltung - dort standen AOK, Aufbaubank
+ * und Arbeitsagentur statt eurer Kunden.
+ */
 const VORBELEG_TYP: Record<string, string> = {
   angebot: "quotation",
   auftragsbestaetigung: "orderconfirmation",
-  rechnung: "salesinvoice",
+  rechnung: "invoice",
 };
 
 
@@ -168,6 +175,68 @@ async function artikelListe(): Promise<Artikel[]> {
 
 
 // ---------------------------------------------------------------------
+// Vorbelege. Die Belegliste von Lexware filtert nur nach Belegnummer und
+// Kontakt-ID, nicht nach Kundennamen. Eine Suche nach "Fischer" ginge also
+// nur über den Umweg Kontaktsuche - und fände nie die Belege mit
+// Einmaladresse, die gar keine Kontakt-ID haben. Deshalb wie beim
+// Artikelstamm: die Belege der letzten zwei Jahre einmal holen, kurz
+// vorhalten, und im Browser durchsuchen.
+// ---------------------------------------------------------------------
+type Vorbeleg = {
+  id: string;
+  nummer: string;
+  datum: string;
+  kontaktId: string | null;
+  kunde: string;
+};
+
+const vorbelegCache = new Map<string, { stand: number; liste: Vorbeleg[] }>();
+const VORBELEG_MINUTEN = 5;
+const VORBELEG_MONATE = 24;
+
+async function vorbelegListe(typ: string): Promise<Vorbeleg[]> {
+  const gemerkt = vorbelegCache.get(typ);
+  if (gemerkt && Date.now() - gemerkt.stand < VORBELEG_MINUTEN * 60_000) {
+    return gemerkt.liste;
+  }
+
+  const ab = new Date();
+  ab.setMonth(ab.getMonth() - VORBELEG_MONATE);
+  const abDatum = ab.toISOString().slice(0, 10);
+
+  const liste: Vorbeleg[] = [];
+  let seite = 0;
+  let seiten = 1;
+
+  while (seite < seiten && seite < 10) {
+    const daten = await jsonOderFehler(
+      await lexware(
+        `/voucherlist?voucherType=${typ}&voucherStatus=any` +
+          `&voucherDateFrom=${abDatum}&page=${seite}&size=250`,
+      ),
+    );
+    seiten = daten.totalPages ?? 1;
+    for (const beleg of daten.content ?? []) {
+      // Entwürfe lassen sich nicht fortführen - Lexware lehnt das
+      // Anlegen dann mit 406 ab. Stornierte Belege liefert niemand aus.
+      if (beleg.voucherStatus === "draft" || beleg.voucherStatus === "voided") continue;
+      liste.push({
+        id: beleg.id,
+        nummer: beleg.voucherNumber ?? "",
+        datum: beleg.voucherDate,
+        kontaktId: beleg.contactId ?? null,
+        kunde: beleg.contactName ?? "",
+      });
+    }
+    seite++;
+  }
+
+  vorbelegCache.set(typ, { stand: Date.now(), liste });
+  return liste;
+}
+
+
+// ---------------------------------------------------------------------
 // Positionen aufbereiten.
 //
 // Festlegung: Auf dem Lieferschein stehen KEINE Preise. Das wird hier
@@ -232,22 +301,11 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
     case "artikel":
       return { artikel: await artikelListe() };
 
-    // Vorbelege zum Auswählen.
+    // Vorbelege zum Auswählen - alle der letzten zwei Jahre, neueste zuerst.
     case "vorbelege": {
       const typ = VORBELEG_TYP[String(daten.typ ?? "")];
       if (!typ) throw new Error("Unbekannte Belegart.");
-      const gefunden = await jsonOderFehler(
-        await lexware(`/voucherlist?voucherType=${typ}&voucherStatus=any&page=0&size=25`),
-      );
-      return {
-        treffer: (gefunden.content ?? []).map((beleg: any) => ({
-          id: beleg.id,
-          nummer: beleg.voucherNumber,
-          datum: beleg.voucherDate,
-          kontaktId: beleg.contactId ?? null,
-          kunde: beleg.contactName ?? "",
-        })),
-      };
+      return { treffer: await vorbelegListe(typ) };
     }
 
     // Einen Vorbeleg lesen, um Empfänger und Positionen vorzubelegen.

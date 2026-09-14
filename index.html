@@ -393,12 +393,17 @@ function VorbelegWahl({ bezugTyp, setBezugTyp, vorbeleg, onUebernehmen, onLoesen
     return () => { abgebrochen = true; };
   }, [bezugTyp]);
 
+  /* Die Liste enthält alle Belege der letzten zwei Jahre - das können
+     Hunderte sein. Angezeigt wird nur ein Ausschnitt, gesucht wird im
+     Ganzen. Mehrere Wörter müssen alle vorkommen, egal wo: "fischer 263"
+     findet Fischers Belege mit 263 in der Nummer. */
   const gefiltert = useMemo(() => {
-    const s = suche.trim().toLowerCase();
-    if (!s) return liste;
-    return liste.filter(b =>
-      (b.nummer || "").toLowerCase().includes(s) ||
-      (b.kunde || "").toLowerCase().includes(s));
+    const woerter = suche.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (woerter.length === 0) return liste.slice(0, 25);
+    return liste.filter(b => {
+      const text = ((b.nummer || "") + " " + (b.kunde || "")).toLowerCase();
+      return woerter.every(w => text.includes(w));
+    }).slice(0, 50);
   }, [liste, suche]);
 
   return (
@@ -436,7 +441,13 @@ function VorbelegWahl({ bezugTyp, setBezugTyp, vorbeleg, onUebernehmen, onLoesen
         <div>
           <input className={eingabeKlasse + " mb-3"} value={suche}
                  onChange={e => setSuche(e.target.value)}
-                 placeholder="Nach Belegnummer oder Kunde filtern…" />
+                 placeholder="Kunde oder Belegnummer suchen…" />
+          {!laedt && !fehler && liste.length > 0 ? (
+            <p className="text-xs text-muted -mt-1 mb-3">
+              {liste.length} Belege der letzten zwei Jahre durchsuchbar
+              {suche.trim() ? "" : " · die neuesten 25 werden angezeigt"}
+            </p>
+          ) : null}
 
           {fehler ? <Hinweisbox art="bad">{fehler}</Hinweisbox> : null}
           {laedt ? <Lade text="Belege werden geladen…" /> : null}
@@ -455,7 +466,7 @@ function VorbelegWahl({ bezugTyp, setBezugTyp, vorbeleg, onUebernehmen, onLoesen
               ))}
               {gefiltert.length === 0 ? (
                 <p className="px-4 py-6 text-sm text-muted text-center">
-                  Nichts gefunden. Es werden die 25 neuesten Belege geladen.
+                  Kein passender Beleg aus den letzten zwei Jahren.
                 </p>
               ) : null}
             </div>
@@ -770,7 +781,7 @@ function Positionen({ zeilen, setZeilen, artikel, laedtArtikel, artikelLaden }) 
   const mitMenge = zeilen.filter(z => z.art !== "text").length;
 
   return (
-    <Abschnitt nummer="3" titel="Positionen"
+    <Abschnitt nummer="4" titel="Positionen"
                hinweis="Auf dem Lieferschein stehen keine Preise — nur Bezeichnung und Menge.">
       <div className="grid gap-3">
         {zeilen.map((z, i) => (
@@ -1272,15 +1283,18 @@ function Anwendung() {
                             kontakt={kontakt} setKontakt={setKontakt}
                             adresse={adresse} setAdresse={setAdresse} />
 
-            <Positionen zeilen={zeilen} setZeilen={setZeilen}
-                        artikel={artikel} laedtArtikel={laedtArtikel}
-                        artikelLaden={artikelLaden} />
-
-            <Abschnitt nummer="4" titel="Einleitungstext"
+            {/* Einleitungstext vor den Positionen - so steht er auch auf
+                dem Lieferschein selbst: erst Kommission und Fahrzeug,
+                dann die Liste. */}
+            <Abschnitt nummer="3" titel="Einleitungstext"
                        hinweis="Hier gehören Kommission und Fahrzeug-ID hinein — eine Bezugsnummer erscheint sonst nirgends auf dem Beleg.">
               <textarea className={eingabeKlasse} rows="3" value={kopftext}
                         onChange={e => setKopftext(e.target.value)} />
             </Abschnitt>
+
+            <Positionen zeilen={zeilen} setZeilen={setZeilen}
+                        artikel={artikel} laedtArtikel={laedtArtikel}
+                        artikelLaden={artikelLaden} />
 
             {maengel.length > 0 ? (
               <div className="mb-4">
