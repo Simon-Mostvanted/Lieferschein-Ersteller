@@ -29,6 +29,10 @@ const VORBELEG_PFAD: Record<string, string> = {
   angebot: "quotations",
   auftragsbestaetigung: "order-confirmations",
   rechnung: "invoices",
+  // Für die Auftragsübersicht der Werkstatt: Der WSA-Beleg ist selbst ein
+  // Lieferschein. Er wird dort nur GELESEN, nie fortgeführt - die
+  // Lieferschein-Maske bietet ihn als Vorbeleg weiterhin nicht an.
+  lieferschein: "delivery-notes",
 };
 
 /**
@@ -43,6 +47,7 @@ const VORBELEG_TYP: Record<string, string> = {
   angebot: "quotation",
   auftragsbestaetigung: "orderconfirmation",
   rechnung: "invoice",
+  lieferschein: "deliverynote",
 };
 
 
