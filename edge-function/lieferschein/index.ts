@@ -279,6 +279,56 @@ function positionenSaeubern(roh: unknown[]): Record<string, unknown>[] {
 
 
 // ---------------------------------------------------------------------
+// Erreichbarkeit eines Kontakts.
+//
+// Für die Auftragsübersicht der Werkstatt: Wer am Fahrzeug steht und
+// eine Rückfrage hat, soll den Kunden anrufen können, ohne vorher im
+// Büro nachzufragen. Auf dem Beleg selbst stehen nur Name und Anschrift
+// - Mail und Telefon hängen am Kontakt.
+//
+// Lexware sortiert beides in Fächer (`business`, `mobile`, `private`,
+// ...). Welches gefüllt ist, hängt daran, wer den Kontakt angelegt hat;
+// eine verlässliche Rangfolge gibt es nicht. Deshalb werden ALLE
+// eingesammelt, Reihenfolge nach Brauchbarkeit für einen Anruf. Was am
+// Ende im Auftrag steht, entscheidet die Werkstatt selbst - das Feld
+// dort ist ein normales Textfeld.
+//
+// `fax` bleibt bewusst draußen: Eine Faxnummer im Anruf-Verweis ist
+// keine Hilfe, sondern ein Fehlversuch.
+// ---------------------------------------------------------------------
+type Erreichbarkeit = { emails: string[]; telefone: string[] };
+
+function sammle(faecher: Record<string, unknown> | undefined, reihenfolge: string[]): string[] {
+  const gefunden: string[] = [];
+  for (const fach of reihenfolge) {
+    for (const wert of (faecher?.[fach] as unknown[]) ?? []) {
+      const text = String(wert ?? "").trim();
+      // Doppelte kommen vor: dieselbe Nummer steht oft in zwei Fächern.
+      if (text && !gefunden.includes(text)) gefunden.push(text);
+    }
+  }
+  return gefunden;
+}
+
+function erreichbarkeit(kontakt: Record<string, any>): Erreichbarkeit {
+  const emails = sammle(kontakt.emailAddresses, ["business", "office", "private", "other"]);
+  const telefone = sammle(kontakt.phoneNumbers, ["mobile", "business", "office", "private", "other"]);
+
+  // Bei Firmen ist der Kontakt selbst oft leer und die Erreichbarkeit
+  // hängt an der Ansprechperson. Die kommt hinten dran - der direkte
+  // Eintrag hat Vorrang.
+  for (const person of kontakt.company?.contactPersons ?? []) {
+    const mail = String(person?.emailAddress ?? "").trim();
+    const tel = String(person?.phoneNumber ?? "").trim();
+    if (mail && !emails.includes(mail)) emails.push(mail);
+    if (tel && !telefone.includes(tel)) telefone.push(tel);
+  }
+
+  return { emails, telefone };
+}
+
+
+// ---------------------------------------------------------------------
 // Die Aktionen. Alles, was die Maske darf - und nichts darüber hinaus.
 // ---------------------------------------------------------------------
 async function ausfuehren(aktion: string, daten: Record<string, any>) {
@@ -319,9 +369,29 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
       const pfad = VORBELEG_PFAD[String(daten.typ ?? "")];
       if (!pfad) throw new Error("Unbekannte Belegart.");
       const beleg = await jsonOderFehler(await lexware(`/${pfad}/${daten.id}`));
+
+      // Erreichbarkeit dazuholen, wenn der Beleg an einem Kontakt hängt.
+      // Einmaladressen haben keine `contactId` - dann bleibt es leer.
+      //
+      // Das darf den Import NICHT umwerfen: Scheitert der Abruf, kommen
+      // Positionen und Kopfdaten trotzdem an und die Nummer wird von
+      // Hand nachgetragen. Ein leerer Telefoneintrag ist ärgerlich, ein
+      // verlorener Auftrag wäre schlimmer.
+      const kontaktId = beleg.address?.contactId ?? null;
+      let kontakt: Erreichbarkeit | null = null;
+      if (kontaktId) {
+        try {
+          kontakt = erreichbarkeit(await jsonOderFehler(await lexware(`/contacts/${kontaktId}`)));
+        } catch {
+          kontakt = null;
+        }
+      }
+
       return {
         nummer: beleg.voucherNumber,
         adresse: beleg.address ?? null,
+        kontaktId,
+        kontakt,
         positionen: (beleg.lineItems ?? []).map((zeile: any) => ({
           type: zeile.type,
           id: zeile.id ?? null,
