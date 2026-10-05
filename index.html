@@ -1044,9 +1044,14 @@ function Anwendung() {
   const [adresse, setAdresse] = useState(LEERE_ADRESSE);
   const [zeilen, setZeilen] = useState([]);
   const [kopftext, setKopftext] = useState(EINLEITUNG_STANDARD);
-  /* Bewusst leer statt mit heute vorbelegt: Ein gewünschtes
-     Fertigstellungsdatum liegt meist in der Zukunft. Ein vorbelegtes
-     Heute würde oft übersehen und stünde dann falsch auf dem Beleg. */
+  /* Der Fertigstellungstermin ist die Ausnahme, nicht die Regel: Oft
+     geht Ware raus, die der Kunde behält - dann gibt es nichts
+     fertigzustellen. Deshalb standardmäßig aus. Ist er eingeschaltet,
+     wird das Datum zur Pflicht.
+     Das Feld selbst bleibt leer statt mit heute vorbelegt: Ein
+     Wunschtermin liegt meist in der Zukunft, ein vorbelegtes Heute
+     würde übersehen und stünde falsch auf dem Beleg. */
+  const [terminAktiv, setTerminAktiv] = useState(false);
   const [fertigstellung, setFertigstellung] = useState("");
 
   /* Artikelstamm - wird erst geholt, wenn die erste Artikelzeile
@@ -1081,7 +1086,8 @@ function Anwendung() {
   function formularLeeren() {
     setBezugTyp("keiner"); setVorbeleg(null);
     setEmpfaengerTyp("kontakt"); setKontakt(null); setAdresse(LEERE_ADRESSE);
-    setZeilen([]); setKopftext(EINLEITUNG_STANDARD); setFertigstellung("");
+    setZeilen([]); setKopftext(EINLEITUNG_STANDARD);
+    setTerminAktiv(false); setFertigstellung("");
     setSendeFehler(""); setErgebnis(null);
   }
 
@@ -1147,7 +1153,7 @@ function Anwendung() {
     /* Das gewünschte Fertigstellungsdatum steht als erste Zeile auf dem
        Beleg. Es geht NICHT als Lexware-Lieferdatum mit: Das bleibt der
        Tag, an dem der Lieferschein entsteht. */
-    const datumsZeile = fertigstellung
+    const datumsZeile = terminAktiv && fertigstellung
       ? [{
           type: "text",
           name: "Gewünschtes Fertigstellungsdatum: " + datumKurz(fertigstellung),
@@ -1162,7 +1168,7 @@ function Anwendung() {
       remark: SCHLUSSTEXT_STANDARD,
       deliveryTerms: "keine"
     };
-  }, [empfaengerTyp, kontakt, adresse, zeilen, kopftext, fertigstellung]);
+  }, [empfaengerTyp, kontakt, adresse, zeilen, kopftext, terminAktiv, fertigstellung]);
 
   /* Was in der Vorschau und im Protokoll steht. Beim Kontakt ist das
      nicht unbedingt vollständig - die Anschrift kennt nur Lexware. */
@@ -1190,14 +1196,16 @@ function Anwendung() {
              (!adresse.street.trim() || !adresse.zip.trim() || !adresse.city.trim()))
       liste.push("Die Einmaladresse ist unvollständig (Straße, PLZ, Ort).");
 
-    if (!fertigstellung) liste.push("Das gewünschte Fertigstellungsdatum fehlt.");
+    if (terminAktiv && !fertigstellung) {
+      liste.push("Der Fertigstellungstermin ist eingeschaltet, aber kein Datum gewählt.");
+    }
 
     const mitMenge = beleg.lineItems.filter(z => z.type !== "text");
     if (mitMenge.length === 0) liste.push("Es fehlt mindestens eine Position mit Menge.");
     if (mitMenge.some(z => !(z.quantity > 0))) liste.push("Eine Position hat keine Menge.");
     if (zeilen.some(z => !z.name.trim())) liste.push("Eine Zeile hat keine Bezeichnung.");
     return liste;
-  }, [beleg, anzeige, adresse, empfaengerTyp, zeilen, fertigstellung]);
+  }, [beleg, anzeige, adresse, empfaengerTyp, zeilen, terminAktiv, fertigstellung]);
 
   async function pdfHolenUndDrucken(lexwareId) {
     const d = await lexware("pdf", { id: lexwareId });
@@ -1318,17 +1326,47 @@ function Anwendung() {
             {/* Einleitungstext vor den Positionen - so steht er auch auf
                 dem Lieferschein selbst: erst Kommission und Fahrzeug,
                 dann die Liste. */}
-            <Abschnitt nummer="3" titel="Fertigstellung und Einleitungstext">
+            <Abschnitt nummer="3" titel="Einleitungstext und Termin">
               <div className="grid gap-4 sm:grid-cols-3">
-                <Feld label="Gewünschtes Fertigstellungsdatum *"
-                      hinweis="Steht als erste Zeile auf dem Lieferschein.">
-                  {/* Ein echtes Datumsfeld: am Rechner öffnet sich der
-                      Kalender des Browsers, am Telefon der Datumswähler
-                      des Geräts. Deshalb kein eigener Kalender - der
-                      eingebaute ist mit dem Finger besser bedienbar. */}
-                  <input type="date" className={eingabeKlasse} value={fertigstellung}
-                         onChange={e => setFertigstellung(e.target.value)} />
-                </Feld>
+                <div>
+                  <span className="block text-xs text-muted mb-1.5 font-medium">
+                    Fertigstellungstermin
+                  </span>
+
+                  {/* Aus- und einschaltbar: Geht Ware raus, die der Kunde
+                      behält, gibt es nichts fertigzustellen. */}
+                  <button onClick={() => setTerminAktiv(!terminAktiv)}
+                          className={"w-full inline-flex items-center gap-2.5 px-4 py-2.5 rounded-xl " +
+                            "text-sm font-semibold border transition min-h-11 " +
+                            (terminAktiv
+                              ? "bg-accent border-accent text-white"
+                              : "bg-panel2 border-line2 text-muted hover:text-text hover:border-accent")}>
+                    <span className={"w-4 h-4 shrink-0 rounded border flex items-center justify-center text-[11px] " +
+                            (terminAktiv ? "bg-white/25 border-white/70" : "border-line2")}>
+                      {terminAktiv ? "✓" : ""}
+                    </span>
+                    Termin angeben
+                  </button>
+
+                  {terminAktiv ? (
+                    <div className="mt-2">
+                      {/* Ein echtes Datumsfeld: am Rechner öffnet sich der
+                          Kalender des Browsers, am Telefon der Datumswähler
+                          des Geräts - mit dem Finger besser bedienbar als
+                          alles Nachgebaute. */}
+                      <input type="date" className={eingabeKlasse} value={fertigstellung}
+                             onChange={e => setFertigstellung(e.target.value)} />
+                      <span className="block text-xs text-muted mt-1">
+                        Steht als erste Zeile auf dem Lieferschein.
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="block text-xs text-muted mt-1.5">
+                      Aus — für Ware, die der Kunde behält.
+                    </span>
+                  )}
+                </div>
+
                 <div className="sm:col-span-2">
                   <Feld label="Einleitungstext"
                         hinweis="Hier gehören Kommission und Fahrzeug-ID hinein — eine Bezugsnummer erscheint sonst nirgends auf dem Beleg.">

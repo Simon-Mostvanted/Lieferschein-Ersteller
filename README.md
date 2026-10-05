@@ -89,9 +89,12 @@ protokolliert; ohne Namen geht es nicht weiter.
 2. **Empfänger** — entweder ein Lexware-Kontakt (Suche ab drei Zeichen) oder
    eine Einmaladresse. Die Einmaladresse wird nicht in die Lexware-Kontakte
    zurückgeschrieben.
-3. **Lieferdatum und Einleitungstext** — das Lieferdatum ist Pflicht und
-   erscheint als erste Zeile auf dem Beleg; in den Einleitungstext gehören
-   Kommission und Fahrzeug-ID.
+3. **Einleitungstext und Termin** — in den Einleitungstext gehören Kommission
+   und Fahrzeug-ID. Der **Fertigstellungstermin** ist abschaltbar und
+   standardmäßig aus: Geht Ware raus, die der Kunde behält, gibt es nichts
+   fertigzustellen. Eingeschaltet wird das Datum zur Pflicht und erscheint
+   als erste Zeile auf dem Beleg. Das Lieferdatum des Belegs selbst ist
+   immer der Tag der Erstellung.
 4. **Positionen** — drei Sorten Zeilen: *Artikel* (Suche im Lexware-Stamm,
    übernimmt Nummer und Bezeichnung), *Frei* (Bezeichnung von Hand) und
    *Überschrift* (Zwischentext ohne Menge). Reihenfolge über ↑ ↓.
