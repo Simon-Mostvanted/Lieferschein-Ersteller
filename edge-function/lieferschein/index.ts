@@ -417,22 +417,18 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
         throw new Error("Der Lieferschein enthält keine Position mit Menge.");
       }
 
+      /* Beleg- und Lieferdatum sind der heutige Tag - der Lieferschein
+         entsteht jetzt und die Ware geht jetzt raus. Das gewünschte
+         Fertigstellungsdatum aus der Maske ist etwas anderes und steht
+         als erste Zeile in den Positionen, nicht hier. */
       const heute = new Date().toISOString();
-
-      /* Das Belegdatum ist der heutige Tag - der Lieferschein entsteht ja
-         jetzt. Das Lieferdatum kommt aus der Maske und kann davon
-         abweichen. Mitternacht in UTC liegt in deutscher Zeit am selben
-         Tag, der Tag kippt also nicht. */
-      const liefertag = /^\d{4}-\d{2}-\d{2}$/.test(String(beleg.shippingDate ?? ""))
-        ? beleg.shippingDate + "T00:00:00.000Z"
-        : heute;
 
       const koerper = {
         voucherDate: heute,
         address: beleg.address,
         lineItems: positionen,
         taxConditions: { taxType: "net" },
-        shippingConditions: { shippingDate: liefertag, shippingType: "delivery" },
+        shippingConditions: { shippingDate: heute, shippingType: "delivery" },
         title: "Lieferschein",
         introduction: beleg.introduction ?? "",
         remark: beleg.remark ?? "",

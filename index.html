@@ -157,15 +157,6 @@ function datumZeitText(iso) {
          d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 }
 
-/** Heute als "2026-10-05" - aus der Ortszeit, nicht aus UTC. Sonst
-    stünde abends ab 22 Uhr im Feld schon der nächste Tag. */
-function heuteISO() {
-  const d = new Date();
-  return d.getFullYear() + "-" +
-         String(d.getMonth() + 1).padStart(2, "0") + "-" +
-         String(d.getDate()).padStart(2, "0");
-}
-
 /** "2026-10-05" -> "05.10.2026" */
 function datumKurz(iso) {
   if (!iso) return "";
@@ -1053,7 +1044,10 @@ function Anwendung() {
   const [adresse, setAdresse] = useState(LEERE_ADRESSE);
   const [zeilen, setZeilen] = useState([]);
   const [kopftext, setKopftext] = useState(EINLEITUNG_STANDARD);
-  const [lieferdatum, setLieferdatum] = useState(heuteISO());
+  /* Bewusst leer statt mit heute vorbelegt: Ein gewünschtes
+     Fertigstellungsdatum liegt meist in der Zukunft. Ein vorbelegtes
+     Heute würde oft übersehen und stünde dann falsch auf dem Beleg. */
+  const [fertigstellung, setFertigstellung] = useState("");
 
   /* Artikelstamm - wird erst geholt, wenn die erste Artikelzeile
      entsteht. Fünf Seiten bei Lexware, das muss nicht beim Start sein. */
@@ -1087,7 +1081,7 @@ function Anwendung() {
   function formularLeeren() {
     setBezugTyp("keiner"); setVorbeleg(null);
     setEmpfaengerTyp("kontakt"); setKontakt(null); setAdresse(LEERE_ADRESSE);
-    setZeilen([]); setKopftext(EINLEITUNG_STANDARD); setLieferdatum(heuteISO());
+    setZeilen([]); setKopftext(EINLEITUNG_STANDARD); setFertigstellung("");
     setSendeFehler(""); setErgebnis(null);
   }
 
@@ -1150,11 +1144,15 @@ function Anwendung() {
             unitName: (z.einheit || "Stück").trim()
           });
 
-    /* Das Lieferdatum steht als erste Zeile auf dem Beleg. Zusätzlich
-       geht es als Lexware-Lieferdatum mit, damit die Angabe im Beleg
-       und in der Buchhaltung dieselbe ist. */
-    const datumsZeile = lieferdatum
-      ? [{ type: "text", name: "Lieferdatum: " + datumKurz(lieferdatum), description: "" }]
+    /* Das gewünschte Fertigstellungsdatum steht als erste Zeile auf dem
+       Beleg. Es geht NICHT als Lexware-Lieferdatum mit: Das bleibt der
+       Tag, an dem der Lieferschein entsteht. */
+    const datumsZeile = fertigstellung
+      ? [{
+          type: "text",
+          name: "Gewünschtes Fertigstellungsdatum: " + datumKurz(fertigstellung),
+          description: ""
+        }]
       : [];
 
     return {
@@ -1162,10 +1160,9 @@ function Anwendung() {
       lineItems: datumsZeile.concat(posten),
       introduction: kopftext.trim(),
       remark: SCHLUSSTEXT_STANDARD,
-      deliveryTerms: "keine",
-      shippingDate: lieferdatum
+      deliveryTerms: "keine"
     };
-  }, [empfaengerTyp, kontakt, adresse, zeilen, kopftext, lieferdatum]);
+  }, [empfaengerTyp, kontakt, adresse, zeilen, kopftext, fertigstellung]);
 
   /* Was in der Vorschau und im Protokoll steht. Beim Kontakt ist das
      nicht unbedingt vollständig - die Anschrift kennt nur Lexware. */
@@ -1193,14 +1190,14 @@ function Anwendung() {
              (!adresse.street.trim() || !adresse.zip.trim() || !adresse.city.trim()))
       liste.push("Die Einmaladresse ist unvollständig (Straße, PLZ, Ort).");
 
-    if (!lieferdatum) liste.push("Das Lieferdatum fehlt.");
+    if (!fertigstellung) liste.push("Das gewünschte Fertigstellungsdatum fehlt.");
 
     const mitMenge = beleg.lineItems.filter(z => z.type !== "text");
     if (mitMenge.length === 0) liste.push("Es fehlt mindestens eine Position mit Menge.");
     if (mitMenge.some(z => !(z.quantity > 0))) liste.push("Eine Position hat keine Menge.");
     if (zeilen.some(z => !z.name.trim())) liste.push("Eine Zeile hat keine Bezeichnung.");
     return liste;
-  }, [beleg, anzeige, adresse, empfaengerTyp, zeilen, lieferdatum]);
+  }, [beleg, anzeige, adresse, empfaengerTyp, zeilen, fertigstellung]);
 
   async function pdfHolenUndDrucken(lexwareId) {
     const d = await lexware("pdf", { id: lexwareId });
@@ -1321,15 +1318,16 @@ function Anwendung() {
             {/* Einleitungstext vor den Positionen - so steht er auch auf
                 dem Lieferschein selbst: erst Kommission und Fahrzeug,
                 dann die Liste. */}
-            <Abschnitt nummer="3" titel="Lieferdatum und Einleitungstext">
+            <Abschnitt nummer="3" titel="Fertigstellung und Einleitungstext">
               <div className="grid gap-4 sm:grid-cols-3">
-                <Feld label="Lieferdatum *" hinweis="Steht als erste Zeile auf dem Lieferschein.">
+                <Feld label="Gewünschtes Fertigstellungsdatum *"
+                      hinweis="Steht als erste Zeile auf dem Lieferschein. Das Lieferdatum des Belegs bleibt der heutige Tag.">
                   {/* Ein echtes Datumsfeld: am Rechner öffnet sich der
                       Kalender des Browsers, am Telefon der Datumswähler
                       des Geräts. Deshalb kein eigener Kalender - der
                       eingebaute ist mit dem Finger besser bedienbar. */}
-                  <input type="date" className={eingabeKlasse} value={lieferdatum}
-                         onChange={e => setLieferdatum(e.target.value)} />
+                  <input type="date" className={eingabeKlasse} value={fertigstellung}
+                         onChange={e => setFertigstellung(e.target.value)} />
                 </Feld>
                 <div className="sm:col-span-2">
                   <Feld label="Einleitungstext"
