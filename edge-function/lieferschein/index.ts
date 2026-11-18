@@ -329,6 +329,61 @@ function erreichbarkeit(kontakt: Record<string, any>): Erreichbarkeit {
 
 
 // ---------------------------------------------------------------------
+// Empfänger auflösen.
+//
+// Lexware nimmt auf einem Beleg eine `contactId` nur an, wenn der
+// Kontakt die Rolle KUNDE hat: "Referenced contact needs to have role
+// customer". Ein reiner Lieferant wird abgelehnt - dabei geht gerade an
+// ihn regelmäßig Ware raus, Teile zur Bearbeitung etwa.
+//
+// Deshalb vor dem Anlegen nachsehen, welche Rollen der Kontakt trägt.
+// Fehlt die Kundenrolle, wird aus der Verknüpfung eine Einmaladresse:
+// Name und Anschrift stehen dann wörtlich auf dem Beleg. Gedruckt sieht
+// das gleich aus; es entfällt allein die Verknüpfung in Lexware, die es
+// für einen Lieferanten ohnehin nicht geben kann.
+// ---------------------------------------------------------------------
+async function empfaengerAufloesen(
+  adressfeld: Record<string, any>,
+): Promise<Record<string, unknown>> {
+  const id = String(adressfeld?.contactId ?? "").trim();
+  if (!id) return adressfeld;
+
+  const kontakt = await jsonOderFehler(await lexware(`/contacts/${id}`));
+  if (kontakt.roles?.customer) return adressfeld;
+
+  // Beim Lieferschein zählt die Lieferanschrift; die Rechnungsanschrift
+  // ist der Rückfall. (Dieselbe Reihenfolge wie in der Kontaktsuche,
+  // damit Vorschau und Beleg dasselbe zeigen.)
+  const anschrift = kontakt.addresses?.shipping?.[0] ??
+    kontakt.addresses?.billing?.[0] ?? {};
+
+  const name = String(
+    kontakt.company?.name ??
+      [kontakt.person?.firstName, kontakt.person?.lastName].filter(Boolean).join(" "),
+  ).trim();
+
+  if (!name) {
+    throw new Error(
+      "Dieser Kontakt ist in Lexware kein Kunde und hat keinen Namen. " +
+        "Bitte die Anschrift von Hand eintragen.",
+    );
+  }
+
+  // `name` und `countryCode` sind bei einer Einmaladresse Pflicht, der
+  // Rest ist freiwillig - leere Felder bleiben besser ganz weg.
+  const ersatz: Record<string, unknown> = {
+    name,
+    countryCode: anschrift.countryCode ?? "DE",
+  };
+  for (const feld of ["supplement", "street", "zip", "city"]) {
+    const wert = String(anschrift[feld] ?? "").trim();
+    if (wert) ersatz[feld] = wert;
+  }
+  return ersatz;
+}
+
+
+// ---------------------------------------------------------------------
 // Die Aktionen. Alles, was die Maske darf - und nichts darüber hinaus.
 // ---------------------------------------------------------------------
 async function ausfuehren(aktion: string, daten: Record<string, any>) {
@@ -355,8 +410,11 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
             // häufigere Fall beim Lieferschein.
             nummer: kunde?.number ?? lieferant?.number ?? null,
             rolle: kunde ? "Kunde" : lieferant ? "Lieferant" : "",
-            adresse: kontakt.addresses?.billing?.[0] ??
-              kontakt.addresses?.shipping?.[0] ?? null,
+            // Beim Lieferschein zieht Lexware die Lieferanschrift vor,
+            // deshalb hier dieselbe Reihenfolge - sonst zeigte die
+            // Vorschau eine andere Anschrift als der gedruckte Beleg.
+            adresse: kontakt.addresses?.shipping?.[0] ??
+              kontakt.addresses?.billing?.[0] ?? null,
           };
         }),
       };
@@ -433,9 +491,14 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
          als erste Zeile in den Positionen, nicht hier. */
       const heute = new Date().toISOString();
 
+      /* Lieferanten kennt Lexware auf einem Beleg nicht als Kontakt.
+         Fehlt die Kundenrolle, wird aus der Verknüpfung hier eine
+         Einmaladresse - siehe empfaengerAufloesen(). */
+      const empfaenger = await empfaengerAufloesen(beleg.address);
+
       const koerper = {
         voucherDate: heute,
-        address: beleg.address,
+        address: empfaenger,
         lineItems: positionen,
         taxConditions: { taxType: "net" },
         shippingConditions: { shippingDate: heute, shippingType: "delivery" },

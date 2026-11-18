@@ -95,6 +95,12 @@ protokolliert; ohne Namen geht es nicht weiter.
    auch Ware an Lieferanten raus, etwa Teile zur Bearbeitung. Lieferanten sind
    in der Trefferliste gekennzeichnet. Die Einmaladresse wird nicht in die
    Lexware-Kontakte zurückgeschrieben.
+   Bei einem **Lieferanten** schreibt die Funktion die Anschrift wörtlich auf
+   den Beleg, statt auf den Kontakt zu verweisen — Lexware lässt auf einem
+   Beleg nur Kunden als Kontakt zu („Referenced contact needs to have role
+   customer"). Gedruckt sieht das gleich aus, nur die Verknüpfung in Lexware
+   entfällt. Ist beim Lieferanten gar keine Anschrift hinterlegt, sagt die
+   Maske das und man nimmt die Einmaladresse.
 3. **Einleitungstext und Termin** — in den Einleitungstext gehören Kommission
    und Fahrzeug-ID. Der **Fertigstellungstermin** ist abschaltbar und
    standardmäßig aus: Geht Ware raus, die der Kunde behält, gibt es nichts

@@ -568,6 +568,16 @@ function EmpfaengerWahl({ typ, setTyp, kontakt, setKontakt, adresse, setAdresse 
                   {kontakt.adresse.street}, {kontakt.adresse.zip} {kontakt.adresse.city}
                 </span>
               ) : null}
+              {/* Lexware lässt auf einem Beleg nur Kunden als Kontakt zu.
+                  Bei einem Lieferanten schreibt die Funktion die Anschrift
+                  direkt auf den Beleg - das soll hier niemanden überraschen. */}
+              {kontakt.rolle === "Lieferant" ? (
+                <span className="block text-xs text-warn mt-1">
+                  {kontakt.adresse
+                    ? "Lieferant: Die Anschrift wird direkt auf den Lieferschein geschrieben, ohne Verknüpfung in Lexware."
+                    : "Für diesen Lieferanten ist in Lexware keine Anschrift hinterlegt – bitte Einmaladresse verwenden."}
+                </span>
+              ) : null}
             </div>
             <Knopf art="geist" klein onClick={() => { setKontakt(null); setSuche(""); }}>Ändern</Knopf>
           </div>
