@@ -129,8 +129,15 @@ const BELEGARTEN = [
   { wert: "keiner",              titel: "Ohne Vorbeleg" },
   { wert: "angebot",             titel: "Angebot" },
   { wert: "auftragsbestaetigung", titel: "Auftragsbestätigung" },
-  { wert: "rechnung",            titel: "Rechnung" }
+  { wert: "rechnung",            titel: "Rechnung" },
+  { wert: "lieferschein",        titel: "Lieferschein" }
 ];
+
+/* Lexware kann einen Lieferschein nicht aus einem Lieferschein
+   fortführen - nur aus Angebot, Auftragsbestätigung oder Rechnung. Ein
+   Lieferschein als Vorbeleg ist deshalb reine Vorlage: Empfänger und
+   Positionen werden übernommen, verknüpft wird nichts. */
+const NICHT_VERKNUEPFBAR = ["lieferschein"];
 
 const EINHEITEN = ["Stück", "m", "m²", "kg", "Satz", "Set", "Paar", "Liter", "Pauschal"];
 
@@ -448,6 +455,9 @@ function VorbelegWahl({ bezugTyp, setBezugTyp, vorbeleg, onUebernehmen, onLoesen
             <span className="text-muted"> · {vorbeleg.kunde}</span>
             <span className="block text-sm text-muted mt-0.5">
               {vorbeleg.anzahl} Positionen übernommen
+              {NICHT_VERKNUEPFBAR.includes(bezugTyp)
+                ? " · als Vorlage, ohne Verknüpfung in Lexware"
+                : ""}
             </span>
           </div>
           <Knopf art="geist" klein onClick={onLoesen}>Lösen</Knopf>
@@ -548,7 +558,11 @@ function EmpfaengerWahl({ typ, setTyp, kontakt, setKontakt, adresse, setAdresse 
           <div className="flex items-center justify-between gap-4 bg-panel2 border border-ok/40 rounded-xl px-4 py-3">
             <div>
               <span className="font-semibold">{kontakt.name}</span>
-              {kontakt.nummer ? <span className="text-muted"> · Kd-Nr. {kontakt.nummer}</span> : null}
+              {kontakt.nummer ? (
+                <span className="text-muted">
+                  {" · "}{kontakt.rolle === "Lieferant" ? "Lief-Nr." : "Kd-Nr."} {kontakt.nummer}
+                </span>
+              ) : null}
               {kontakt.adresse ? (
                 <span className="block text-sm text-muted mt-0.5">
                   {kontakt.adresse.street}, {kontakt.adresse.zip} {kontakt.adresse.city}
@@ -570,6 +584,11 @@ function EmpfaengerWahl({ typ, setTyp, kontakt, setKontakt, adresse, setAdresse 
                   <button key={k.id} onClick={() => setKontakt(k)}
                           className="w-full text-left px-4 py-3 hover:bg-panel2 transition">
                     <span className="font-semibold">{k.name}</span>
+                    {k.rolle === "Lieferant" ? (
+                      <span className="ml-2 text-xs text-warn border border-warn/40 rounded px-1.5 py-0.5">
+                        Lieferant
+                      </span>
+                    ) : null}
                     {k.adresse ? (
                       <span className="block text-sm text-muted">
                         {k.adresse.street}, {k.adresse.zip} {k.adresse.city}
@@ -1166,7 +1185,6 @@ function Anwendung() {
       lineItems: datumsZeile.concat(posten),
       introduction: kopftext.trim(),
       remark: SCHLUSSTEXT_STANDARD,
-      deliveryTerms: "keine"
     };
   }, [empfaengerTyp, kontakt, adresse, zeilen, kopftext, terminAktiv, fertigstellung]);
 
@@ -1217,7 +1235,8 @@ function Anwendung() {
     try {
       const angelegt = await lexware("anlegen", {
         beleg,
-        vorbelegId: vorbeleg ? vorbeleg.id : null
+        bezugTyp: vorbeleg ? bezugTyp : "keiner",
+        vorbelegId: vorbeleg && !NICHT_VERKNUEPFBAR.includes(bezugTyp) ? vorbeleg.id : null
       });
 
       /* Protokoll. Scheitert das, ist der Lieferschein trotzdem in der

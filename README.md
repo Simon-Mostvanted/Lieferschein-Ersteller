@@ -18,6 +18,7 @@ Funktion bei Supabase. Sie hält den Lexware-Schlüssel. Ohne sie läuft nichts.
 | `index.html` | Die komplette Maske |
 | `edge-function/lieferschein/index.ts` | Das Zwischenstück zu Lexware (läuft bei Supabase) |
 | `Lieferschein-Supabase-Setup.sql` | Datenbank einrichten (einmalig) |
+| `Lieferschein-Update-01.sql` | Lieferschein als Bezugsart zulassen |
 | `Start-Lieferschein.cmd` | Am PC öffnen |
 | `build/serve.ps1` | Der kleine Webserver dahinter |
 
@@ -81,14 +82,19 @@ git push
 Beim Öffnen den eigenen Namen wählen. Er wird zu jedem Lieferschein
 protokolliert; ohne Namen geht es nicht weiter.
 
-1. **Vorbeleg** (optional) — Angebot, Auftragsbestätigung oder Rechnung
-   wählen. Empfänger und Positionen werden übernommen, der Lieferschein wird
-   in Lexware mit dem Vorbeleg verknüpft. Die Bezugsnummer erscheint dabei
-   **nicht** automatisch auf dem Beleg — wer sie draufhaben will, schreibt sie
-   in den Einleitungstext.
-2. **Empfänger** — entweder ein Lexware-Kontakt (Suche ab drei Zeichen) oder
-   eine Einmaladresse. Die Einmaladresse wird nicht in die Lexware-Kontakte
-   zurückgeschrieben.
+1. **Vorbeleg** (optional) — Angebot, Auftragsbestätigung, Rechnung oder ein
+   früherer Lieferschein. Empfänger und Positionen werden übernommen, der neue
+   Beleg wird in Lexware mit dem Vorbeleg verknüpft. Die Bezugsnummer erscheint
+   dabei **nicht** automatisch auf dem Beleg — wer sie draufhaben will, schreibt
+   sie in den Einleitungstext.
+   Ein **Lieferschein als Vorbeleg** ist die Ausnahme: Er dient nur als Vorlage
+   zum Abschreiben. Lexware kann einen Lieferschein nicht aus einem Lieferschein
+   fortführen, also wird nichts verknüpft. Im Protokoll steht er trotzdem.
+2. **Empfänger** — entweder ein Lexware-Kontakt oder eine Einmaladresse. Die
+   Suche greift ab drei Zeichen und findet **Kunden und Lieferanten**; es geht
+   auch Ware an Lieferanten raus, etwa Teile zur Bearbeitung. Lieferanten sind
+   in der Trefferliste gekennzeichnet. Die Einmaladresse wird nicht in die
+   Lexware-Kontakte zurückgeschrieben.
 3. **Einleitungstext und Termin** — in den Einleitungstext gehören Kommission
    und Fahrzeug-ID. Der **Fertigstellungstermin** ist abschaltbar und
    standardmäßig aus: Geht Ware raus, die der Kunde behält, gibt es nichts

@@ -29,9 +29,9 @@ const VORBELEG_PFAD: Record<string, string> = {
   angebot: "quotations",
   auftragsbestaetigung: "order-confirmations",
   rechnung: "invoices",
-  // Für die Auftragsübersicht der Werkstatt: Der WSA-Beleg ist selbst ein
-  // Lieferschein. Er wird dort nur GELESEN, nie fortgeführt - die
-  // Lieferschein-Maske bietet ihn als Vorbeleg weiterhin nicht an.
+  // Lieferscheine werden nur GELESEN, nie fortgeführt: Lexware verknüpft
+  // einen Lieferschein nicht mit einem anderen. In der Maske dient er als
+  // Vorlage zum Abschreiben, in der Auftragsübersicht als WSA-Beleg.
   lieferschein: "delivery-notes",
 };
 
@@ -338,17 +338,27 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
     case "kontakte": {
       const suche = String(daten.suche ?? "").trim();
       if (suche.length < 3) return { treffer: [] };
+      /* Ohne `customer=true`: Es wird auch an Lieferanten geliefert -
+         Teile zur Bearbeitung, Rücksendungen, beigestelltes Material. */
       const gefunden = await jsonOderFehler(
-        await lexware(`/contacts?name=${encodeURIComponent(suche)}&customer=true&page=0&size=25`),
+        await lexware(`/contacts?name=${encodeURIComponent(suche)}&page=0&size=25`),
       );
       return {
-        treffer: (gefunden.content ?? []).map((kontakt: any) => ({
-          id: kontakt.id,
-          name: kontakt.company?.name ??
-            [kontakt.person?.firstName, kontakt.person?.lastName].filter(Boolean).join(" "),
-          nummer: kontakt.roles?.customer?.number ?? null,
-          adresse: kontakt.addresses?.billing?.[0] ?? null,
-        })),
+        treffer: (gefunden.content ?? []).map((kontakt: any) => {
+          const kunde = kontakt.roles?.customer;
+          const lieferant = kontakt.roles?.vendor;
+          return {
+            id: kontakt.id,
+            name: kontakt.company?.name ??
+              [kontakt.person?.firstName, kontakt.person?.lastName].filter(Boolean).join(" "),
+            // Wer beides ist, wird als Kunde geführt - das ist der
+            // häufigere Fall beim Lieferschein.
+            nummer: kunde?.number ?? lieferant?.number ?? null,
+            rolle: kunde ? "Kunde" : lieferant ? "Lieferant" : "",
+            adresse: kontakt.addresses?.billing?.[0] ??
+              kontakt.addresses?.shipping?.[0] ?? null,
+          };
+        }),
       };
     }
 
@@ -432,11 +442,21 @@ async function ausfuehren(aktion: string, daten: Record<string, any>) {
         title: "Lieferschein",
         introduction: beleg.introduction ?? "",
         remark: beleg.remark ?? "",
-        deliveryTerms: beleg.deliveryTerms ?? "keine",
-      };
+      } as Record<string, unknown>;
+
+      /* Lieferbedingungen nur mitschicken, wenn wirklich welche da sind.
+         Früher stand hier fest "keine" - das ist aber keine der in
+         Lexware hinterlegten Vorlagen und landete wörtlich auf dem
+         Beleg. Ohne das Feld bleibt die Zeile leer. */
+      const bedingungen = String(beleg.deliveryTerms ?? "").trim();
+      if (bedingungen) koerper.deliveryTerms = bedingungen;
 
       let pfad = "/delivery-notes?finalize=true";
-      if (daten.vorbelegId) {
+      /* Aus einem Lieferschein entsteht kein Lieferschein: Weiterführen
+         kann Lexware nur Angebot, Auftragsbestätigung und Rechnung. Ein
+         Lieferschein dient hier allein als Vorlage zum Abschreiben,
+         deshalb wird er nicht verknüpft. */
+      if (daten.vorbelegId && daten.bezugTyp !== "lieferschein") {
         pfad += `&precedingSalesVoucherId=${encodeURIComponent(String(daten.vorbelegId))}`;
       }
 
